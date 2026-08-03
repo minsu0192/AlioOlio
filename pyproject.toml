@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alio-olio"
+version = "0.1.0"
+description = "ALIO recruitment alerts synchronized to Notion and Telegram"
+requires-python = ">=3.11"
+dependencies = [
+  "apscheduler>=3.10,<4",
+  "beautifulsoup4>=4.12,<5",
+  "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+alio-olio = "alio_olio.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["alio_olio*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

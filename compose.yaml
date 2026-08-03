@@ -1,0 +1,7 @@
+services:
+  alio-olio:
+    build: .
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env}
+    volumes:
+      - ./data:/app/data
