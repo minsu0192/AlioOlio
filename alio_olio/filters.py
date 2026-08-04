@@ -28,6 +28,13 @@ def matches(posting: Posting, rules: list[FilterRule]) -> bool:
     haystack = posting.searchable_text()
     if includes and not any(word in haystack for word in includes):
         return False
-    if any(word in haystack for word in excludes):
+    # 제외 키워드는 "제목에서 기관명을 뺀 부분"만 검사한다. 상세 본문의
+    # "장애인 의무고용" 같은 보일러플레이트나, 기관명 자체에 포함된 단어
+    # (예: 한국장애인고용공단)로 정상 공고가 잘못 제외되는 것을 막는다.
+    title_hay = posting.title.casefold()
+    org = posting.organization.casefold().strip()
+    if org:
+        title_hay = title_hay.replace(org, " ")
+    if any(word in title_hay for word in excludes):
         return False
     return True
