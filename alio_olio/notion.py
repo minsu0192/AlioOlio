@@ -33,7 +33,16 @@ POSTING_PROPERTIES = {
     "ALIO 링크": {"url": {}}, "ALIO ID": {"number": {"format": "number"}},
     "최초등록일": {"date": {}}, "마지막 확인": {"date": {}}, "알림완료": {"checkbox": {}},
     "지원 관리 등록": {"checkbox": {}}, "지원 현황 링크": {"url": {}},
+    # 공고문에서 뽑아 채우는 값. 사람이 직접 고치는 칸이기도 하므로 비어 있을 때만 쓴다.
+    "관심": {"checkbox": {}},
+    "서류발표일": {"date": {}}, "필기일정": {"date": {}}, "필기발표일": {"date": {}},
+    "면접일정": {"date": {}}, "최종발표일": {"date": {}},
+    "자소서 문항": {"rich_text": {}}, "전형 메모": {"rich_text": {}},
+    "직무기술서 링크": {"url": {}},
 }
+
+# 공고문에서 추출해 채우는 날짜 속성. 사용자가 손으로 넣은 값은 덮지 않는다.
+DETAIL_DATE_PROPERTIES = ("서류발표일", "필기일정", "필기발표일", "면접일정", "최종발표일")
 
 FILTER_PROPERTIES = {
     "필터명": {"title": {}}, "사용": {"checkbox": {}},
@@ -51,6 +60,16 @@ def _text(value: str) -> list[dict]:
 
 def _multi(values: list[str]) -> dict:
     return {"multi_select": [{"name": item[:100]} for item in values[:100]]}
+
+
+def _is_empty(prop: dict | None) -> bool:
+    """조회로 받은 속성이 비어 있는지. 채워져 있으면 추출값으로 덮지 않는다."""
+    if not prop:
+        return True
+    kind = prop.get("type")
+    if kind:
+        return not prop.get(kind)
+    return not (prop.get("date") or prop.get("rich_text") or prop.get("url"))
 
 
 class NotionClient:
@@ -137,8 +156,14 @@ class NotionClient:
 
     def upsert_posting(self, data_source_id: str, posting: Posting, matched: bool,
                        page_id: str | None, delivered: bool) -> str:
+        # 캘린더 카드는 "기관 · 직군"만 간결하게 보여준다(연도/차수 등은 생략).
+        # 전체 공고 제목은 ALIO 링크에서 확인할 수 있다.
+        roles = [w for w in posting.work_areas if w in ("사무직", "행정직")] or posting.work_areas[:1]
+        card_label = posting.organization or posting.title
+        if posting.organization and roles:
+            card_label = f"{posting.organization} · {'/'.join(roles)}"
         properties: dict[str, Any] = {
-            "공고명": {"title": _text(posting.title)}, "기관": {"rich_text": _text(posting.organization)},
+            "공고명": {"title": _text(card_label)}, "기관": {"rich_text": _text(posting.organization)},
             "지원기간": {"date": {"start": posting.start_date.isoformat(), "end": posting.end_date.isoformat()}},
             "필터 일치": {"checkbox": matched}, "상태": {"select": {"name": posting.status or "진행중"}},
             "고용형태": _multi(posting.employment_types), "근무분야": _multi(posting.work_areas),
@@ -158,6 +183,82 @@ class NotionClient:
             "properties": properties,
         })
         return page["id"]
+
+    def interest_postings(self, posting_data_source_id: str) -> list[dict]:
+        return self.query(posting_data_source_id, {
+            "filter": {"property": "관심", "checkbox": {"equals": True}}
+        })
+
+    def update_posting_details(self, page_id: str, current: dict, dates: dict[str, str],
+                               job_description_url: str = "", questions: str = "",
+                               memo: str = "") -> list[str]:
+        """추출 결과를 페이지에 쓰되, 이미 값이 있는 속성은 건드리지 않는다.
+
+        `current`는 조회로 받은 properties 원본이다. 사용자가 노션에서 직접 고친 날짜를
+        다음 동기화가 되돌려 놓으면 이 기능은 쓸모가 없어지므로, 빈 칸 채우기만 한다.
+        """
+        properties: dict[str, Any] = {}
+        for name, value in dates.items():
+            if _is_empty(current.get(name)):
+                properties[name] = {"date": {"start": value}}
+        if job_description_url and _is_empty(current.get("직무기술서 링크")):
+            properties["직무기술서 링크"] = {"url": job_description_url}
+        if questions and _is_empty(current.get("자소서 문항")):
+            properties["자소서 문항"] = {"rich_text": _text(questions)}
+        # 전형 메모는 사람이 쓰는 칸이 아니라 무엇을 어디서 뽑았는지 남기는 기록이다.
+        # 추출 결과가 바뀌면 따라 갱신되어야 근거로 쓸모가 있다.
+        if memo:
+            properties["전형 메모"] = {"rich_text": _text(memo)}
+        if properties:
+            self.request("PATCH", f"/pages/{page_id}", json={"properties": properties})
+        return sorted(properties)
+
+    def ensure_schedule_events(self, schedule_data_source_id: str, posting_page_id: str,
+                               organization: str, stages: dict[str, tuple[str, str | None]]) -> int:
+        """'관심 전형 일정' DB에 단계별 행을 만든다. 이미 있는 유형은 건너뛴다.
+
+        stages: {유형: (확정상태, 날짜 또는 None)}
+        """
+        existing = {}
+        for page in self.query(schedule_data_source_id, {
+            "filter": {"property": "공고", "relation": {"contains": posting_page_id}}
+        }):
+            name = (page["properties"].get("유형", {}).get("select") or {}).get("name")
+            if name:
+                existing[name] = page
+        created = 0
+        for stage, (status, day) in stages.items():
+            if stage in existing:
+                # 처음엔 날짜를 몰라 "미정"으로 만들어 둔 행이라도, 나중에 공고문에서
+                # 날짜를 읽어내면 채워 준다. 사람이 손으로 넣은 값은 건드리지 않는다.
+                created += int(self._fill_undecided(existing[stage], day))
+                continue
+            properties: dict[str, Any] = {
+                "일정명": {"title": _text(f"{organization} {stage}")},
+                "유형": {"select": {"name": stage}},
+                "확정상태": {"select": {"name": status}},
+                "기관": {"rich_text": _text(organization)},
+                "공고": {"relation": [{"id": posting_page_id}]},
+            }
+            if day:
+                properties["일정일"] = {"date": {"start": day}}
+            self.request("POST", "/pages", json={
+                "parent": {"type": "data_source_id", "data_source_id": schedule_data_source_id},
+                "properties": properties,
+            })
+            created += 1
+        return created
+
+    def _fill_undecided(self, page: dict, day: str | None) -> bool:
+        properties = page.get("properties", {})
+        status = (properties.get("확정상태", {}).get("select") or {}).get("name")
+        if not day or status != "미정" or not _is_empty(properties.get("일정일")):
+            return False
+        self.request("PATCH", f"/pages/{page['id']}", json={"properties": {
+            "일정일": {"date": {"start": day}},
+            "확정상태": {"select": {"name": "예정"}},
+        }})
+        return True
 
     def application_requests(self, posting_data_source_id: str) -> list[dict]:
         return self.query(posting_data_source_id, {

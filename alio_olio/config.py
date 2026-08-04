@@ -24,6 +24,7 @@ class Settings:
     telegram_bot_token: str
     telegram_chat_id: str
     notion_application_data_source_id: str = ""
+    notion_schedule_data_source_id: str = ""
     database_path: str = "data/alio_olio.db"
     timezone: str = "Asia/Seoul"
     notion_api_version: str = "2026-03-11"
@@ -45,6 +46,7 @@ class Settings:
         return cls(
             **values,
             notion_application_data_source_id=os.getenv("NOTION_APPLICATION_DATA_SOURCE_ID", ""),
+            notion_schedule_data_source_id=os.getenv("NOTION_SCHEDULE_DATA_SOURCE_ID", ""),
             database_path=os.getenv("DATABASE_PATH", "data/alio_olio.db"),
             timezone=os.getenv("TIMEZONE", "Asia/Seoul"),
             notion_api_version=os.getenv("NOTION_API_VERSION", "2026-03-11"),

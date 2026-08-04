@@ -14,7 +14,7 @@ from .service import SyncService
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ALIO → Notion → Telegram synchronizer")
-    parser.add_argument("command", choices=["bootstrap", "sync", "run"])
+    parser.add_argument("command", choices=["bootstrap", "sync", "enrich", "run"])
     return parser
 
 
@@ -27,6 +27,8 @@ def main() -> None:
         print(json.dumps(service.bootstrap(), ensure_ascii=False, indent=2))
     elif args.command == "sync":
         print(json.dumps(service.sync(), ensure_ascii=False, indent=2))
+    elif args.command == "enrich":
+        print(json.dumps(service.enrich_interests(), ensure_ascii=False, indent=2))
     else:
         # Catch up immediately after downtime; normal deduplication makes this safe.
         service.sync()

@@ -8,7 +8,14 @@ from datetime import date, timedelta
 import httpx
 from bs4 import BeautifulSoup
 
+from .attachments import Attachment, parse_attachments
 from .domain import Posting, split_values
+
+
+def process_section(detail_text: str) -> str:
+    """상세페이지의 '전형절차 방법' 문구만 잘라낸다. 어떤 단계가 있는지 판별하는 용도."""
+    match = re.search(r"전형절차\s*/?\s*방법\s*(.+?)\s*전형단계별 채용정보", detail_text)
+    return match.group(1) if match else ""
 
 
 class AlioClient:
@@ -22,7 +29,7 @@ class AlioClient:
             headers={"User-Agent": "AlioOlio/0.1 (+personal recruitment monitor)"},
         )
 
-    def list_postings(self, lookback_days: int = 240, start_date: date | None = None) -> list[Posting]:
+    def list_postings(self, lookback_days: int = 60, start_date: date | None = None) -> list[Posting]:
         today = date.today()
         payload = {
             "detailcodeValueArr": [], "locationValueArr": [], "worktypeValueArr": [],
@@ -56,10 +63,24 @@ class AlioClient:
             "채용구분": "career_types", "근무지": "locations", "근무분야": "work_areas",
         }
         for label, field in labels.items():
-            match = re.search(re.escape(label) + r"\s+(.+?)(?=\s+(?:" + "|".join(map(re.escape, labels)) + r"|채용인원|우대조건|응시자격)\s+)", posting.detail_text)
+            match = re.search(re.escape(label) + r"\s+(.+?)(?=\s+(?:" + "|".join(map(re.escape, labels)) + r"|채용인원|우대조건|응시자격|대체인력여부)\s+)", posting.detail_text)
             if match:
                 setattr(posting, field, split_values(match.group(1)))
         return posting
+
+    def attachments(self, seq: int) -> dict[str, list[Attachment]]:
+        response = self.client.get("/mobile/information/informationRecruitDtl.do", params={"seq": seq})
+        response.raise_for_status()
+        return parse_attachments(response.text)
+
+    def download(self, attachment: Attachment) -> bytes:
+        response = self.client.get(
+            "/download/download.json",
+            params={"fileNo": attachment.file_no},
+            headers={"Referer": f"{self.base_url}/mobile/information/informationRecruitDtl.do"},
+        )
+        response.raise_for_status()
+        return response.content
 
     @staticmethod
     def fingerprint(posting: Posting) -> str:
