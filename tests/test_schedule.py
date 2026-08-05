@@ -55,6 +55,27 @@ def test_nonstandard_layouts_yield_nothing_rather_than_wrong_dates():
     assert hits("302968_한국수력원자력.txt", date(2026, 7, 22)) == {"최종발표일": "2026-12-22"}
 
 
+def test_rows_without_a_stage_name_do_not_borrow_the_previous_stage():
+    """한수원 공고: 필기 시행일(9.5)을 그 앞의 정보입력 마감일(8.31)로 읽던 문제.
+
+    "구 분" 칸이 셀 병합으로 비어 단계 이름이 "내 용" 칸에만 있는 표다. 앞 단계를
+    이어받는 것은 "합격자 발표" 행일 때뿐이어야 한다.
+    """
+    from alio_olio.schedule import parse_schedule_table
+
+    table = [["구 분", "일 정", "내 용"],
+             ["", "8.27.(목)", "○ 필기시험 응시 대상자 발표(사전평가 통과자)"],
+             ["", "8.31.(월) 11:00까지", "○ 본인확인을 위한 추가정보(생년월일, 사진) 제출"],
+             ["", "9.5(토)", "○ 필기시험"],
+             ["", "9.28.(월) ~ 10.1(목) 17:00", "○ 자기소개서 제출"],
+             ["", "10.12.(월)∼10.22.(목)", "○ 면접"]]
+    found = parse_schedule_table(table, date(2026, 7, 22))
+    assert found["필기일정"].day == date(2026, 9, 5)
+    assert found["면접일정"].day == date(2026, 10, 12)
+    # "응시 대상자 발표"는 시험 전 안내지 필기 합격자 발표가 아니다.
+    assert "필기발표일" not in found
+
+
 def test_stages_follow_the_declared_process():
     written = stages_in_process("서류전형(30배수)→필기전형(10배수)→면접전형→최종합격")
     assert written == {"서류발표일", "필기일정", "필기발표일", "면접일정", "최종발표일"}

@@ -116,6 +116,8 @@ def _is_date_header(cell: str) -> bool:
     return len(squeezed) <= _HEADER_MAX and bool(_DATE_COLUMN.search(squeezed))
 _ANNOUNCE_COLUMN = re.compile(r"발\s*표")
 _ANNOUNCE_INLINE = re.compile(r"합격자?\s*발표|합격발표|발표일|결과발표")
+# "필기시험 응시대상자 발표"는 시험을 볼 사람을 알리는 사전 안내지 합격자 발표가 아니다.
+_PRE_ANNOUNCE = re.compile(r"응시\s*대상|응시자\s*발표")
 
 # 셀 하나에 단계와 날짜가 (단계, 날짜) 순으로 들어 있는 경우: "필기전형:9.19.(토)"
 _CELL_STAGE_DATE = re.compile(r"(?P<label>[가-힣]{2,10})\s*[:：]?\s*(?P<date>" + _DATE + r")")
@@ -194,15 +196,24 @@ def parse_schedule_table(table: list[list[str]], reference: date) -> dict[str, S
     stage = None
     for row in table[1:]:
         label = _squeeze(row[label_col]) if label_col < len(row) else ""
-        # 라벨이 "합격자 발표"뿐인 행은 바로 앞 단계의 발표일이다.
-        stage = _classify(label) or stage
+        announced = "발표" in label
+        row_stage = _classify(label)
+        # 단계 이름이 없는 행에서 앞 단계를 이어받는 것은 "합격자 발표"처럼 그 단계에
+        # 딸린 행일 때뿐이다. "추가정보 제출"·"자기소개서 제출"·"인성검사"처럼 제 이름을
+        # 가진 다른 행까지 이어받으면 그 날짜를 앞 단계의 시행일로 읽어 실제 시험일을
+        # 놓친다 — 한수원 공고에서 필기 시행일(9.5)을 정보입력 마감일(8.31)로 잘못
+        # 가져왔다(실측 확인).
+        if row_stage is None and not announced:
+            continue
+        stage = row_stage or stage
         if stage is None:
             continue
         schedule_cell = row[date_col] if date_col < len(row) else ""
         # 라벨에 "발표"가 들어간 행은 시행일이 아니라 발표일 행이다. "필기시험 응시대상자
         # 발표"를 필기 시행일로 읽으면 실제 시험일을 놓친다(실측 확인).
-        if "발표" in label:
-            day = _cell_date(schedule_cell, reference)
+        if announced:
+            # 다만 "응시대상자 발표"는 시험 전 안내라 합격자 발표가 아니다.
+            day = None if _PRE_ANNOUNCE.search(label) else _cell_date(schedule_cell, reference)
             _record(found, stage, True, day, schedule_cell)
         else:
             _record(found, stage, False, _stage_date(schedule_cell, stage, reference), schedule_cell)
