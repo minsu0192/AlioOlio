@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .domain import Posting
@@ -88,6 +88,11 @@ class Storage:
             rows = self.connection.execute("SELECT * FROM postings ORDER BY seq DESC").fetchall()
             return [(Posting.from_json_dict(json.loads(row["payload"])), row) for row in rows]
 
+    def row(self, seq: int) -> sqlite3.Row | None:
+        """공고 한 건의 메타 행. 동기화 루프에서 전체 테이블을 훑지 않으려고 쓴다."""
+        with self.lock:
+            return self.connection.execute("SELECT * FROM postings WHERE seq=?", (seq,)).fetchone()
+
     def posting(self, seq: int) -> Posting | None:
         with self.lock:
             row = self.connection.execute("SELECT payload FROM postings WHERE seq=?", (seq,)).fetchone()
@@ -126,28 +131,40 @@ class Storage:
             ).fetchall()
             return [Posting.from_json_dict(json.loads(row["payload"])) for row in rows]
 
-    def extraction(self, seq: int, file_no: str, version: int) -> dict | None:
+    def extraction(self, seq: int, version: int, file_no: str | None = None,
+                   max_age: timedelta | None = None) -> dict | None:
         """같은 공고문을 두 번 내려받지 않기 위한 캐시.
 
-        기관이 공고문을 교체하면 fileNo가 바뀌고, 추출 로직을 고치면 version이 오른다.
-        어느 쪽이든 캐시를 무시하고 다시 뽑는다.
+        `file_no`를 주면 그 파일에 대한 캐시만 인정한다(기관이 공고문을 교체하면 무효).
+        `max_age`를 주면 그만큼 최근에 뽑은 것만 인정한다 — 이 경우 fileNo를 알아내려고
+        ALIO에 요청하기 전에 먼저 확인해, 5분마다 도는 필터 갱신이 첨부 서버를
+        두드리지 않게 한다. 추출 로직을 고쳐 version이 오르면 어느 쪽이든 무효다.
         """
         with self.lock:
             row = self.connection.execute(
-                "SELECT extracted FROM attachment_extractions WHERE seq=? AND file_no=?", (seq, file_no)
+                "SELECT extracted, extracted_at FROM attachment_extractions WHERE seq=?", (seq,)
             ).fetchone()
             if row is None:
                 return None
             cached = json.loads(row["extracted"])
-            return cached if cached.get("version") == version else None
+            if cached.get("version") != version:
+                return None
+            if file_no is not None and cached.get("file_no") != file_no:
+                return None
+            if max_age is not None:
+                age = datetime.now(timezone.utc) - datetime.fromisoformat(row["extracted_at"])
+                if age > max_age:
+                    return None
+            return cached
 
     def set_extraction(self, seq: int, file_no: str, extracted: dict) -> None:
         with self.lock:
+            payload = dict(extracted, file_no=file_no)
             self.connection.execute(
                 "INSERT INTO attachment_extractions(seq,file_no,extracted,extracted_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(seq) DO UPDATE SET file_no=excluded.file_no, extracted=excluded.extracted, "
                 "extracted_at=excluded.extracted_at",
-                (seq, file_no, json.dumps(extracted, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
+                (seq, file_no, json.dumps(payload, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
             )
             self.connection.commit()
 

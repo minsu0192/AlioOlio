@@ -107,3 +107,29 @@ def test_event_the_user_already_dated_is_left_alone():
 
     assert client(handler).ensure_schedule_events(
         "schedule", "page-1", "한국부동산원", {"필기": ("예정", "2026-09-05")}) == 0
+
+
+def test_an_unchanged_memo_is_not_rewritten():
+    """전형 메모는 추출 결과가 바뀌면 갱신하지만, 같은 내용을 매번 다시 쓰지는 않는다.
+
+    필터 갱신이 5분마다 돌기 때문에, 이 검사가 없으면 하루 천 번 넘게 노션 페이지를
+    건드려 "최종 편집" 시각만 계속 바뀐다.
+    """
+    def handler(request):
+        raise AssertionError(f"불필요한 요청: {request.method} {request.url}")
+
+    current = {"전형 메모": {"type": "rich_text",
+                          "rich_text": [{"plain_text": "추출 경로: 표 / 읽은 표 3개"}]}}
+    assert client(handler).update_posting_details(
+        "page", current, {}, memo="추출 경로: 표 / 읽은 표 3개") == []
+
+
+def test_a_changed_memo_is_written():
+    patches = []
+    def handler(request):
+        patches.append(json.loads(request.content)["properties"])
+        return httpx.Response(200, json={"id": "page"})
+
+    current = {"전형 메모": {"type": "rich_text", "rich_text": [{"plain_text": "예전 근거"}]}}
+    assert client(handler).update_posting_details("page", current, {}, memo="새 근거") == ["전형 메모"]
+    assert patches[0]["전형 메모"]["rich_text"][0]["text"]["content"] == "새 근거"

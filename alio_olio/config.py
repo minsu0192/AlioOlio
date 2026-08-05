@@ -29,6 +29,10 @@ class Settings:
     timezone: str = "Asia/Seoul"
     notion_api_version: str = "2026-03-11"
     alio_base_url: str = "https://www.alio.go.kr"
+    # 매시 정각, 아침 7시부터 저녁 7시까지. 알림은 동기화할 때만 나가므로 이 값이
+    # 곧 텔레그램이 오는 시간대다. 새벽에 알림이 울리지 않게 기본값을 좁혀 둔다.
+    sync_hours: str = "7-19"
+    filter_refresh_minutes: int = 15
 
     @classmethod
     def from_env(cls, require_integrations: bool = True) -> "Settings":
@@ -51,4 +55,6 @@ class Settings:
             timezone=os.getenv("TIMEZONE", "Asia/Seoul"),
             notion_api_version=os.getenv("NOTION_API_VERSION", "2026-03-11"),
             alio_base_url=os.getenv("ALIO_BASE_URL", "https://www.alio.go.kr"),
+            sync_hours=os.getenv("SYNC_HOURS", "7-19"),
+            filter_refresh_minutes=int(os.getenv("FILTER_REFRESH_MINUTES", "15")),
         )

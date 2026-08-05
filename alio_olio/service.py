@@ -20,6 +20,10 @@ log = logging.getLogger(__name__)
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
 EXTRACTION_VERSION = 4
 
+# 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
+# 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
+EXTRACTION_COOLDOWN = timedelta(hours=6)
+
 
 class SyncService:
     def __init__(self, settings: Settings, storage: Storage | None = None,
@@ -65,7 +69,7 @@ class SyncService:
             is_new, _changed = self.storage.upsert(posting, self.alio.fingerprint(posting), matched)
             stats["new"] += int(is_new)
             stats["matched"] += int(matched)
-            row = next(row for item, row in self.storage.postings() if item.seq == posting.seq)
+            row = self.storage.row(posting.seq)
             if matched or row["notion_page_id"]:
                 page_id = self.notion.upsert_posting(
                     resources["posting_data_source_id"], posting, matched,
@@ -164,10 +168,14 @@ class SyncService:
         return dates, events
 
     def _extraction(self, posting: Posting) -> dict:
+        # 최근에 뽑아둔 게 있으면 fileNo를 알아보려고 ALIO에 묻지도 않는다.
+        fresh = self.storage.extraction(posting.seq, EXTRACTION_VERSION, max_age=EXTRACTION_COOLDOWN)
+        if fresh is not None:
+            return fresh
         attachments = self.alio.attachments(posting.seq)
         notice = next(iter(attachments["notice"]), None)
         file_no = notice.file_no if notice else "none"
-        cached = self.storage.extraction(posting.seq, file_no, EXTRACTION_VERSION)
+        cached = self.storage.extraction(posting.seq, EXTRACTION_VERSION, file_no=file_no)
         if cached is not None:
             return cached
 

@@ -20,6 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+log = logging.getLogger(__name__)
+
+
 def configure_logging(log_path: str | None = None) -> None:
     """상시 실행을 견디는 로깅.
 
@@ -54,10 +57,13 @@ def main() -> None:
         # Catch up immediately after downtime; normal deduplication makes this safe.
         service.sync()
         scheduler = BlockingScheduler(timezone=settings.timezone)
-        scheduler.add_job(service.sync, CronTrigger(hour="8,17", minute=0, timezone=settings.timezone),
+        scheduler.add_job(service.sync,
+                          CronTrigger(hour=settings.sync_hours, minute=0, timezone=settings.timezone),
                           id="alio_sync", replace_existing=True, coalesce=True, misfire_grace_time=None)
-        scheduler.add_job(service.refresh_filters, IntervalTrigger(minutes=5, timezone=settings.timezone),
+        scheduler.add_job(service.refresh_filters,
+                          IntervalTrigger(minutes=settings.filter_refresh_minutes, timezone=settings.timezone),
                           id="filter_refresh", replace_existing=True, coalesce=True, max_instances=1)
+        log.info("동기화 %s시 정각, 필터 갱신 %d분마다", settings.sync_hours, settings.filter_refresh_minutes)
         scheduler.start()
 
 

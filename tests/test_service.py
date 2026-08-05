@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from alio_olio import service as service_module
 from alio_olio.attachments import Attachment
@@ -115,16 +115,45 @@ def test_enrich_extracts_dates_and_seeds_undecided_stages(tmp_path, monkeypatch)
     assert stages["면접"] == ("미정", None)
 
 
-def test_attachments_are_downloaded_once(tmp_path, monkeypatch):
+def test_recent_extraction_skips_alio_entirely(tmp_path, monkeypatch):
+    """필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO를 하루 천 번 넘게
+    두드리므로, 쿨다운 안에서는 상세페이지 조회조차 하지 않는다."""
     service, alio, _notion = build(tmp_path, [interest_page(1)], monkeypatch)
     service.sync()  # 공고문(77)과 자소서 문항용 입사지원서(79)를 한 번씩 받는다
+    assert alio.downloads == ["77", "79"]
+
+    looked_up = []
+    original = alio.attachments
+    alio.attachments = lambda seq: (looked_up.append(seq), original(seq))[1]
     service.enrich_interests()
     assert alio.downloads == ["77", "79"]
+    assert looked_up == []  # 상세페이지도 안 본다
+
+
+def test_a_replaced_notice_is_re_read_once_the_cooldown_passes(tmp_path, monkeypatch):
+    service, alio, _notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    service.sync()
+    _age_extractions(service, service_module.EXTRACTION_COOLDOWN + timedelta(hours=1))
 
     # 기관이 공고문을 교체하면 fileNo가 바뀌므로 다시 받는다.
     alio.notice = Attachment("99", "공고문.pdf")
     service.enrich_interests()
     assert alio.downloads == ["77", "79", "99", "79"]
+
+
+def test_an_unchanged_notice_is_not_downloaded_again_after_the_cooldown(tmp_path, monkeypatch):
+    service, alio, _notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    service.sync()
+    _age_extractions(service, service_module.EXTRACTION_COOLDOWN + timedelta(hours=1))
+
+    service.enrich_interests()  # 상세페이지는 보지만 같은 fileNo라 받지는 않는다
+    assert alio.downloads == ["77", "79"]
+
+
+def _age_extractions(service, age):
+    stale = (datetime.now(timezone.utc) - age).isoformat()
+    service.storage.connection.execute("UPDATE attachment_extractions SET extracted_at=?", (stale,))
+    service.storage.connection.commit()
 
 
 def test_attachment_failure_does_not_break_sync(tmp_path, monkeypatch):

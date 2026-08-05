@@ -62,6 +62,10 @@ def _multi(values: list[str]) -> dict:
     return {"multi_select": [{"name": item[:100]} for item in values[:100]]}
 
 
+def _plain_text(prop: dict | None) -> str:
+    return "".join(part.get("plain_text", "") for part in (prop or {}).get("rich_text", []))
+
+
 def _is_empty(prop: dict | None) -> bool:
     """조회로 받은 속성이 비어 있는지. 채워져 있으면 추출값으로 덮지 않는다."""
     if not prop:
@@ -205,9 +209,10 @@ class NotionClient:
             properties["직무기술서 링크"] = {"url": job_description_url}
         if questions and _is_empty(current.get("자소서 문항")):
             properties["자소서 문항"] = {"rich_text": _text(questions)}
-        # 전형 메모는 사람이 쓰는 칸이 아니라 무엇을 어디서 뽑았는지 남기는 기록이다.
-        # 추출 결과가 바뀌면 따라 갱신되어야 근거로 쓸모가 있다.
-        if memo:
+        # 전형 메모는 사람이 쓰는 칸이 아니라 무엇을 어디서 뽑았는지 남기는 기록이므로
+        # 추출 결과가 바뀌면 따라 갱신한다. 다만 내용이 같은데 매번 쓰면 노션의 편집
+        # 시각만 계속 바뀌고 API 호출도 낭비된다.
+        if memo and _plain_text(current.get("전형 메모")) != _text(memo)[0]["text"]["content"]:
             properties["전형 메모"] = {"rich_text": _text(memo)}
         if properties:
             self.request("PATCH", f"/pages/{page_id}", json={"properties": properties})
