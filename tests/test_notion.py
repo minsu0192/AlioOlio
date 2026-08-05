@@ -149,3 +149,28 @@ def test_posting_gets_a_category_so_the_calendar_can_colour_it():
                       employment_types=["무기계약직", "비정규직", "청년인턴(체험형)"])
     client(handler).upsert_posting("ds", posting, True, None, False)
     assert created[0]["구분"]["select"]["name"] == "체험형인턴"
+
+
+def test_expired_postings_are_marked_closed_once():
+    """상태는 ALIO가 주는 값이라 한 번 등록되면 마감돼도 "진행중"으로 남는다.
+
+    마감일이 지났는지는 우리가 아는 사실이므로 직접 고친다. 이미 "마감"인 공고는
+    조회 조건에서 빠지므로 같은 페이지를 다시 쓰지 않는다.
+    """
+    queries, patches = [], []
+    def handler(request):
+        if request.url.path.endswith("/query"):
+            queries.append(json.loads(request.content)["filter"])
+            return httpx.Response(200, json={"has_more": False, "results": [
+                {"id": "page-1", "properties": {"ALIO ID": {"number": 101}}},
+                {"id": "page-2", "properties": {"ALIO ID": {"number": 102}}},
+            ]})
+        patches.append(json.loads(request.content)["properties"])
+        return httpx.Response(200, json={"id": "page-1"})
+
+    assert client(handler).close_expired_postings("postings", {101}) == 1
+    # 노션 날짜 필터를 쓰면 안 된다. "지원기간"은 기간 속성이라 before/after가 기간의
+    # 시작과 비교되어, 접수 시작일만 지난 진행 중 공고까지 전부 마감 처리된다.
+    assert queries[0] == {"property": "상태", "select": {"equals": "진행중"}}
+    assert patches[0]["상태"]["select"]["name"] == "마감"
+    assert len(patches) == 1  # 마감일이 안 지난 102는 건드리지 않는다

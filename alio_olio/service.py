@@ -87,6 +87,11 @@ class SyncService:
             stats["notified"] += 1
 
         self._sync_application_requests(resources)
+        today = date.today()
+        expired = {item.seq for item, row in self.storage.postings()
+                   if item.end_date < today and row["notion_page_id"]}
+        stats["closed"] = self.notion.close_expired_postings(
+            resources["posting_data_source_id"], expired)
         stats["events"] = self._safe_enrich()
         self.storage.set_meta("last_successful_sync", datetime.now(timezone.utc).isoformat())
         self.storage.set_meta("last_sync_stats", json.dumps(stats, ensure_ascii=False))

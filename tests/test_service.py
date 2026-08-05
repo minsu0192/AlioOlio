@@ -43,6 +43,7 @@ class FakeNotion:
         self.detail_updates = []
         self.questions = []
         self.events = []
+        self.closed = set()
     def bootstrap(self, parent):
         return {"filter_data_source_id": "filters", "posting_data_source_id": "postings",
                 "filter_database_id": "fdb", "posting_database_id": "pdb"}
@@ -54,6 +55,9 @@ class FakeNotion:
         return []
     def interest_postings(self, _):
         return self.interests
+    def close_expired_postings(self, _ds, expired_seqs):
+        self.closed = set(expired_seqs)
+        return len(self.closed)
     def update_posting_details(self, page_id, current, dates, job_description_url="",
                                questions="", memo=""):
         self.detail_updates.append((page_id, dates, job_description_url, memo))

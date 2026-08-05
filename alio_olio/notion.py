@@ -190,6 +190,27 @@ class NotionClient:
         })
         return page["id"]
 
+    def close_expired_postings(self, posting_data_source_id: str, expired_seqs: set[int]) -> int:
+        """마감일이 지난 공고를 "마감"으로 표시한다.
+
+        상태는 ALIO가 목록에 실어 주는 값이라, 한 번 등록된 공고는 마감돼도 계속
+        "진행중"으로 남는다. 마감 여부는 호출부가 로컬 마감일로 판정해 넘긴다 —
+        노션의 날짜 필터로 거르면 안 된다. `지원기간`은 기간 속성이고 before/after는
+        기간의 **시작**과 비교하므로, 접수 시작일만 지나면 전부 걸려 버린다.
+        """
+        closed = 0
+        for page in self.query(posting_data_source_id, {
+            "filter": {"property": "상태", "select": {"equals": "진행중"}}
+        }):
+            seq = page["properties"].get("ALIO ID", {}).get("number")
+            if seq is None or int(seq) not in expired_seqs:
+                continue
+            self.request("PATCH", f"/pages/{page['id']}", json={
+                "properties": {"상태": {"select": {"name": "마감"}}}
+            })
+            closed += 1
+        return closed
+
     def interest_postings(self, posting_data_source_id: str) -> list[dict]:
         return self.query(posting_data_source_id, {
             "filter": {"property": "관심", "checkbox": {"equals": True}}
