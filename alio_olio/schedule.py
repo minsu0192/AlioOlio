@@ -195,7 +195,8 @@ def parse_schedule_table(table: list[list[str]], reference: date) -> dict[str, S
     for row in table[1:]:
         label = _squeeze(row[label_col]) if label_col < len(row) else ""
         # 라벨이 "합격자 발표"뿐인 행은 바로 앞 단계의 발표일이다.
-        stage = _classify(label) or stage
+        own = _classify(label)
+        stage = own or stage
         if stage is None:
             continue
         schedule_cell = row[date_col] if date_col < len(row) else ""
@@ -204,7 +205,11 @@ def parse_schedule_table(table: list[list[str]], reference: date) -> dict[str, S
         if "발표" in label:
             day = _cell_date(schedule_cell, reference)
             _record(found, stage, True, day, schedule_cell)
-        else:
+        elif own:
+            # 물려받은 단계로는 시행일을 적지 않는다. 전형 일정표에는 "추가정보 제출",
+            # "자기소개서 제출"처럼 단계 이름이 없는 지원자 제출 마감 행이 섞여 있고,
+            # 이 행들이 앞 단계를 물려받으면 정작 뒤에 오는 진짜 시행일 행을 밀어낸다
+            # (한수원: 필기를 8.31 추가정보 제출로, 면접을 9.28 자소서 제출로 읽었다).
             _record(found, stage, False, _stage_date(schedule_cell, stage, reference), schedule_cell)
         # 비고 칸에 "· 합격자발표: 9.2.(수)"만 적어두는 표도 흔하다.
         _record(found, stage, True, _announce_date(row, announce_col, reference), " ".join(row))
