@@ -121,9 +121,11 @@ class NotionClient:
         })
 
     def _create_views(self, database_id: str, data_source_id: str) -> None:
+        # 마감된 공고는 캘린더에서 뺀다. 기록은 "관심 공고" 표에 그대로 남는다.
         filters = {"and": [
             {"property": "필터 일치", "checkbox": {"equals": True}},
             {"property": "캘린더 표시", "checkbox": {"equals": True}},
+            {"property": "상태", "select": {"equals": "진행중"}},
         ]}
         views = [
             ("지원 캘린더", "calendar", filters),
