@@ -2,6 +2,9 @@ import json
 
 import httpx
 
+from datetime import date
+
+from alio_olio.domain import Posting
 from alio_olio.notion import NotionClient
 
 
@@ -133,3 +136,16 @@ def test_a_changed_memo_is_written():
     current = {"전형 메모": {"type": "rich_text", "rich_text": [{"plain_text": "예전 근거"}]}}
     assert client(handler).update_posting_details("page", current, {}, memo="새 근거") == ["전형 메모"]
     assert patches[0]["전형 메모"]["rich_text"][0]["text"]["content"] == "새 근거"
+
+
+def test_posting_gets_a_category_so_the_calendar_can_colour_it():
+    """캘린더 카드 색은 "구분" 선택 속성에서 나온다. 비면 색 없이 표시된다."""
+    created = []
+    def handler(request):
+        created.append(json.loads(request.content)["properties"])
+        return httpx.Response(200, json={"id": "page"})
+
+    posting = Posting(1, "기관", "공고", date(2026, 8, 1), date(2026, 8, 20), date(2026, 8, 1),
+                      employment_types=["무기계약직", "비정규직", "청년인턴(체험형)"])
+    client(handler).upsert_posting("ds", posting, True, None, False)
+    assert created[0]["구분"]["select"]["name"] == "체험형인턴"

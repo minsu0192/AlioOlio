@@ -68,3 +68,18 @@ OFFICIAL_FIELD_MAP = {
     "학력": "education",
     "기관": "organization",
 }
+
+
+# 노션 캘린더는 "구분" 선택 속성의 색으로 카드를 칠한다. 고용형태에서 유도한다.
+# 채용형 인턴은 결국 정규직 전환이라 정규직과 같은 색으로 묶는다.
+CATEGORY_RULES = [
+    ("정규직", ("정규직", "청년인턴(채용형)")),
+    ("체험형인턴", ("청년인턴(체험형)",)),
+]
+
+
+def categorize(employment_types: list[str]) -> str:
+    for label, keywords in CATEGORY_RULES:
+        if any(keyword in employment_types for keyword in keywords):
+            return label
+    return "기타"

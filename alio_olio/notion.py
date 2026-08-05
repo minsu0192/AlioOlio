@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from .domain import FilterRule, Posting
+from .domain import FilterRule, Posting, categorize
 
 
 FILTER_SEEDS = [
@@ -170,6 +170,8 @@ class NotionClient:
             "공고명": {"title": _text(card_label)}, "기관": {"rich_text": _text(posting.organization)},
             "지원기간": {"date": {"start": posting.start_date.isoformat(), "end": posting.end_date.isoformat()}},
             "필터 일치": {"checkbox": matched}, "상태": {"select": {"name": posting.status or "진행중"}},
+            # 캘린더 카드 색이 여기서 나온다. 비어 있으면 색 없이 표시된다.
+            "구분": {"select": {"name": categorize(posting.employment_types)}},
             "고용형태": _multi(posting.employment_types), "근무분야": _multi(posting.work_areas),
             "NCS": _multi(posting.ncs), "근무지": _multi(posting.locations), "학력": _multi(posting.education),
             "채용구분": _multi(posting.career_types), "채용인원": {"number": posting.headcount},
