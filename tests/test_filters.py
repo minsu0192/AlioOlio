@@ -1,6 +1,6 @@
 from datetime import date
 
-from alio_olio.domain import FilterRule, Posting
+from alio_olio.domain import FilterRule, Posting, split_values
 from alio_olio.filters import matches
 
 
@@ -55,3 +55,17 @@ def test_an_exclude_word_inside_the_organisation_name_is_ignored():
                     title="한국폴리텍대학 대전캠퍼스 청년인턴(장애) 채용 공고")
     assert matches(keeps, [exclude])
     assert not matches(drops, [exclude])
+
+
+def test_commas_inside_brackets_do_not_split_a_value():
+    """ALIO는 괄호 안에서도 쉼표를 쓴다. 그냥 쪼개면 "보조원))" 같은 조각이 남는다."""
+    assert split_values("기타(기능노무직(취사원, 보조원))") == ["기타(기능노무직(취사원, 보조원))"]
+    assert split_values("사무직, 기타(사회복지직(간호사), 청년인턴직)") == [
+        "사무직", "기타(사회복지직(간호사), 청년인턴직)"]
+
+
+def test_the_replacement_worker_tail_is_not_part_of_the_employment_type():
+    """"정규직"과 "정규직 대체인력여부 아니오"가 다른 선택지로 갈라지면 안 된다."""
+    assert split_values("정규직 대체인력여부 아니오") == ["정규직"]
+    assert split_values("청년인턴(체험형) 대체인력여부 예") == ["청년인턴(체험형)"]
+    assert split_values("무기계약직, 정규직 대체인력여부 아니오") == ["무기계약직", "정규직"]

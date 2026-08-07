@@ -302,14 +302,23 @@ class SyncService:
         target = self.settings.notion_application_data_source_id
         if not target:
             return 0
+        # 아직 안 이어진 행부터 추린다. 이어 붙일 게 없으면 공고 148건을 훑지 않는다.
+        pending = [(row, alio_seq(row["properties"].get("공고링크", {}).get("url")))
+                   for row in self.notion.applications(target)
+                   if not row["properties"].get("ALIO 공고", {}).get("relation")]
+        pending = [(row, seq) for row, seq in pending if seq is not None]
+        if not pending:
+            return 0
         pages_by_seq = {}
-        for page in self.notion.query(resources["posting_data_source_id"]):
+        for page in self.notion.query(resources["posting_data_source_id"],
+                                      {"filter": {"or": [{"property": "ALIO ID",
+                                                          "number": {"equals": seq}}
+                                                         for _row, seq in pending]}}):
             seq = page["properties"].get("ALIO ID", {}).get("number")
             if seq is not None:
                 pages_by_seq[int(seq)] = page["id"]
         linked = 0
-        for row in self.notion.applications(target):
-            seq = alio_seq(row["properties"].get("공고링크", {}).get("url"))
+        for row, seq in pending:
             if seq in pages_by_seq:
                 linked += int(self.notion.link_application(row, pages_by_seq[seq]))
         if linked:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -7,6 +8,8 @@ from typing import Any
 import httpx
 
 from .domain import FilterRule, Posting, categorize
+
+log = logging.getLogger(__name__)
 
 
 FILTER_SEEDS = [
@@ -59,7 +62,13 @@ def _text(value: str) -> list[dict]:
 
 
 def _multi(values: list[str]) -> dict:
-    return {"multi_select": [{"name": item[:100]} for item in values[:100]]}
+    """다중 선택 값. 노션은 옵션 이름에 쉼표를 허용하지 않아 가운뎃점으로 바꾼다.
+
+    ALIO는 "기타(기능노무직(취사원, 보조원))"처럼 괄호 안에서 쉼표를 쓴다. 쉼표째로
+    보내면 400이 나고, 쉼표로 쪼개면 "보조원))" 같은 조각이 선택지로 남는다.
+    필터는 저장된 원래 값으로 판정하므로 여기서만 바꿔 준다.
+    """
+    return {"multi_select": [{"name": item.replace(",", " ·")[:100]} for item in values[:100]]}
 
 
 def _plain_text(prop: dict | None) -> str:
@@ -85,7 +94,17 @@ class NotionClient:
 
     def request(self, method: str, path: str, **kwargs) -> dict:
         for attempt in range(5):
-            response = self.client.request(method, path, **kwargs)
+            try:
+                response = self.client.request(method, path, **kwargs)
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError,
+                    httpx.ReadTimeout) as error:
+                # 응답을 받다 연결이 끊기는 일이 있다. 여기서 포기하면 그 시각
+                # 동기화가 통째로 날아가므로 상태 코드 재시도와 같이 취급한다.
+                if attempt == 4:
+                    raise
+                log.warning("노션 연결이 끊겨 다시 시도합니다 (%s): %s", path, error)
+                time.sleep(2 ** attempt)
+                continue
             if response.status_code != 429 and response.status_code < 500:
                 response.raise_for_status()
                 return response.json()
@@ -127,16 +146,27 @@ class NotionClient:
             {"property": "캘린더 표시", "checkbox": {"equals": True}},
             {"property": "상태", "select": {"equals": "진행중"}},
         ]}
+        # 표에는 마감이 가까운 순으로 세운다. 정렬이 없으면 만들어진 순서대로 나와
+        # 어느 공고가 급한지 보이지 않는다. 칸도 필요한 것만 편다(기본은 35개 전부).
+        listed = ["공고명", "기관", "구분", "관심", "지원기간", "상태", "서류발표일", "필기일정",
+                  "필기발표일", "면접일정", "최종발표일", "근무지", "근무분야", "학력", "채용인원",
+                  "ALIO 링크"]
         views = [
-            ("지원 캘린더", "calendar", filters),
-            ("관심 공고", "table", {"property": "필터 일치", "checkbox": {"equals": True}}),
-            ("제외한 공고", "table", {"property": "캘린더 표시", "checkbox": {"equals": False}}),
+            ("지원 캘린더", "calendar", filters, None, None),
+            ("관심 공고", "table", {"property": "필터 일치", "checkbox": {"equals": True}},
+             [{"property": "지원기간", "direction": "ascending"}], listed),
+            ("제외한 공고", "table", {"property": "캘린더 표시", "checkbox": {"equals": False}},
+             [{"property": "지원기간", "direction": "descending"}],
+             ["공고명", "기관", "구분", "지원기간", "상태", "고용형태", "근무지", "근무분야", "ALIO 링크"]),
         ]
-        for name, kind, view_filter in views:
-            self.request("POST", "/views", json={
-                "database_id": database_id, "data_source_id": data_source_id,
-                "name": name, "type": kind, "filter": view_filter,
-            })
+        for name, kind, view_filter, sorts, columns in views:
+            body = {"database_id": database_id, "data_source_id": data_source_id,
+                    "name": name, "type": kind, "filter": view_filter}
+            if sorts:
+                body["sorts"] = sorts
+            if columns:
+                body["display_properties"] = columns
+            self.request("POST", "/views", json=body)
 
     def query(self, data_source_id: str, payload: dict | None = None) -> list[dict]:
         body = dict(payload or {})

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import time
 from datetime import date, timedelta
 
 import httpx
@@ -10,6 +12,8 @@ from bs4 import BeautifulSoup
 
 from .attachments import Attachment, parse_attachments
 from .domain import Posting, split_values
+
+log = logging.getLogger(__name__)
 
 
 def process_section(detail_text: str) -> str:
@@ -29,6 +33,24 @@ class AlioClient:
             headers={"User-Agent": "AlioOlio/0.1 (+personal recruitment monitor)"},
         )
 
+    def _request(self, method: str, path: str, **kwargs):
+        """끊긴 연결은 다시 시도한다.
+
+        ALIO는 응답을 보내다 말고 연결을 닫을 때가 있다("incomplete chunked read").
+        상시 실행 중에 이걸 만나면 그 시각 동기화가 통째로 날아가고 텔레그램도
+        안 온다. 잠깐 쉬었다 두 번 더 두드린다.
+        """
+        for attempt in range(3):
+            try:
+                return self.client.request(method, path, **kwargs)
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError,
+                    httpx.ReadTimeout) as error:
+                if attempt == 2:
+                    raise
+                log.warning("ALIO 연결이 끊겨 다시 시도합니다 (%s): %s", path, error)
+                time.sleep(2 ** attempt)
+        raise RuntimeError("unreachable")
+
     def list_postings(self, lookback_days: int = 60, start_date: date | None = None) -> list[Posting]:
         today = date.today()
         payload = {
@@ -40,7 +62,7 @@ class AlioClient:
         }
         results: list[Posting] = []
         while True:
-            response = self.client.post("/information/getRecruitList.json", json=payload)
+            response = self._request("POST", "/information/getRecruitList.json", json=payload)
             response.raise_for_status()
             body = response.json()
             if body.get("status") != "success":
@@ -53,7 +75,8 @@ class AlioClient:
         return results
 
     def enrich(self, posting: Posting) -> Posting:
-        response = self.client.get("/mobile/information/informationRecruitDtl.do", params={"seq": posting.seq})
+        response = self._request("GET", "/mobile/information/informationRecruitDtl.do",
+                                 params={"seq": posting.seq})
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         text = " ".join(soup.stripped_strings)
@@ -69,12 +92,13 @@ class AlioClient:
         return posting
 
     def attachments(self, seq: int) -> dict[str, list[Attachment]]:
-        response = self.client.get("/mobile/information/informationRecruitDtl.do", params={"seq": seq})
+        response = self._request("GET", "/mobile/information/informationRecruitDtl.do", params={"seq": seq})
         response.raise_for_status()
         return parse_attachments(response.text)
 
     def download(self, attachment: Attachment) -> bytes:
-        response = self.client.get(
+        response = self._request(
+            "GET",
             "/download/download.json",
             params={"fileNo": attachment.file_no},
             headers={"Referer": f"{self.base_url}/mobile/information/informationRecruitDtl.do"},

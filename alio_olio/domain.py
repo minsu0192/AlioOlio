@@ -1,12 +1,36 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Any
 
+# 고용형태 뒤에 딸려 오는 "대체인력여부 예/아니오"는 고용형태가 아니다. 그대로 두면
+# "정규직"과 "정규직 대체인력여부 아니오"가 서로 다른 선택지로 갈라진다.
+_REPLACEMENT_TAIL = re.compile(r"\s*대체인력여부\s*(?:예|아니오)\s*$")
+
 
 def split_values(value: str | None) -> list[str]:
-    return [part.strip() for part in (value or "").split(",") if part.strip()]
+    """쉼표로 나누되 괄호 안의 쉼표는 건드리지 않는다.
+
+    ALIO는 "기타(기능노무직(취사원, 보조원))"처럼 괄호 안에서 쉼표를 쓴다. 그냥
+    쪼개면 "기타(기능노무직(취사원"과 "보조원))"이 각각 선택지로 남는다.
+    """
+    parts: list[str] = []
+    depth, current = 0, []
+    for char in value or "":
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth = max(0, depth - 1)
+        if char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    cleaned = (_REPLACEMENT_TAIL.sub("", part).strip() for part in parts)
+    return [part for part in cleaned if part]
 
 
 @dataclass

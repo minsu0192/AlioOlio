@@ -92,15 +92,21 @@ def main() -> None:
         scheduler.add_job(service.sync,
                           CronTrigger(hour=settings.sync_hours, minute=0, timezone=settings.timezone),
                           id="alio_sync", replace_existing=True, coalesce=True, misfire_grace_time=None)
+        # 동기화 한 번이 몇 분씩 걸린다. 기본 유예는 1초라 그 사이에 걸린 주기 작업이
+        # 통째로 건너뛰어졌다("Run time of job ... was missed by 0:10:59"). 늦더라도
+        # 한 번은 돌게 유예를 넉넉히 준다.
         scheduler.add_job(lambda: restart_if_source_changed(fingerprint),
                           IntervalTrigger(minutes=2), id="source_watch",
-                          replace_existing=True, coalesce=True, max_instances=1)
+                          replace_existing=True, coalesce=True, max_instances=1,
+                          misfire_grace_time=600)
         scheduler.add_job(service.refresh_filters,
                           IntervalTrigger(minutes=settings.filter_refresh_minutes, timezone=settings.timezone),
-                          id="filter_refresh", replace_existing=True, coalesce=True, max_instances=1)
+                          id="filter_refresh", replace_existing=True, coalesce=True, max_instances=1,
+                          misfire_grace_time=600)
         scheduler.add_job(service.remind_submissions,
                           CronTrigger(hour=settings.reminder_hours, minute=0, timezone=settings.timezone),
-                          id="submission_reminder", replace_existing=True, coalesce=True, max_instances=1)
+                          id="submission_reminder", replace_existing=True, coalesce=True, max_instances=1,
+                          misfire_grace_time=1800)
         log.info("동기화 %s시 정각, 필터 갱신 %d분마다, 제출 리마인더 %s시 (마감 D-%d부터)",
                  settings.sync_hours, settings.filter_refresh_minutes,
                  settings.reminder_hours, settings.reminder_days)
