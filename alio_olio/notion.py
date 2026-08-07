@@ -250,7 +250,7 @@ class NotionClient:
 
     def update_posting_details(self, page_id: str, current: dict, dates: dict[str, str],
                                job_description_url: str = "", questions: str = "",
-                               memo: str = "") -> list[str]:
+                               memo: str = "", profile: dict[str, str] | None = None) -> list[str]:
         """추출 결과를 페이지에 쓰되, 이미 값이 있는 속성은 건드리지 않는다.
 
         `current`는 조회로 받은 properties 원본이다. 사용자가 노션에서 직접 고친 날짜를
@@ -264,6 +264,10 @@ class NotionClient:
             properties["직무기술서 링크"] = {"url": job_description_url}
         if questions and _is_empty(current.get("자소서 문항")):
             properties["자소서 문항"] = {"rich_text": _text(questions)}
+        # 직무기술서에서 뽑은 값. 직접 정리해 둔 내용을 덮지 않도록 빈 칸만 채운다.
+        for name, value in (profile or {}).items():
+            if value and _is_empty(current.get(name)):
+                properties[name] = {"rich_text": _text(value)}
         # 전형 메모는 사람이 쓰는 칸이 아니라 무엇을 어디서 뽑았는지 남기는 기록이므로
         # 추출 결과가 바뀌면 따라 갱신한다. 다만 내용이 같은데 매번 쓰면 노션의 편집
         # 시각만 계속 바뀌고 API 호출도 낭비된다.

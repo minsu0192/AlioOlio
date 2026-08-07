@@ -10,6 +10,7 @@ from .attachments import to_tables, to_text
 from .config import Settings
 from .domain import Posting
 from .filters import matches
+from .job_description import extract_profile
 from .notion import NotionClient
 from .questions import extract_questions, format_questions, pick_form
 from .schedule import STAGES, resolve, stages_in_process
@@ -19,7 +20,7 @@ from .telegram import TelegramClient
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 5
+EXTRACTION_VERSION = 6
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -202,6 +203,7 @@ class SyncService:
         written = self.notion.update_posting_details(
             page["id"], page["properties"], dates,
             job_description_url=extraction["job_description_url"],
+            profile=extraction.get("profile", {}),
             questions=extraction.get("questions", ""),
             memo=extraction["memo"],
         )
@@ -242,11 +244,21 @@ class SyncService:
             "stages": {field: {"date": hit.day.isoformat(), "evidence": hit.evidence}
                        for field, hit in hits.items()},
             "job_description_url": self._first_url(attachments["job_description"]),
+            "profile": self._profile(attachments),
             "questions": self._questions(attachments),
             "memo": self._memo(posting, notice, text, tables, hits, attachments),
         }
         self.storage.set_extraction(posting.seq, file_no, result)
         return result
+
+    def _profile(self, attachments: dict) -> dict[str, str]:
+        """직무기술서에서 주요 업무·필요 지식·기술·직무 핵심역량을 뽑는다."""
+        document = next(iter(attachments["job_description"]), None)
+        if document is None:
+            return {}
+        found = extract_profile(to_tables(document, self.alio.download(document)))
+        log.info("직무기술서에서 %d개 항목 (%s)", len(found), document.name)
+        return found
 
     def _questions(self, attachments: dict) -> str:
         """자소서 문항은 공고문이 아니라 입사지원서·자기소개서 양식에 들어 있다."""

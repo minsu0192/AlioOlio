@@ -43,6 +43,7 @@ class FakeNotion:
         self.applications_rows = []
         self.detail_updates = []
         self.questions = []
+        self.profiles = []
         self.events = []
         self.closed = set()
     def bootstrap(self, parent):
@@ -64,9 +65,10 @@ class FakeNotion:
         self.closed = set(expired_seqs)
         return len(self.closed)
     def update_posting_details(self, page_id, current, dates, job_description_url="",
-                               questions="", memo=""):
+                               questions="", memo="", profile=None):
         self.detail_updates.append((page_id, dates, job_description_url, memo))
         self.questions.append(questions)
+        self.profiles.append(profile or {})
         return sorted(dates)
     def ensure_schedule_events(self, _ds, page_id, organization, stages):
         self.events.append((page_id, stages))
@@ -131,14 +133,14 @@ def test_recent_extraction_skips_alio_entirely(tmp_path, monkeypatch):
     """필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO를 하루 천 번 넘게
     두드리므로, 쿨다운 안에서는 상세페이지 조회조차 하지 않는다."""
     service, alio, _notion = build(tmp_path, [interest_page(1)], monkeypatch)
-    service.sync()  # 공고문(77)과 자소서 문항용 입사지원서(79)를 한 번씩 받는다
-    assert alio.downloads == ["77", "79"]
+    service.sync()  # 공고문(77), 직무기술서(78), 자소서 문항용 입사지원서(79)
+    assert alio.downloads == ["77", "78", "79"]
 
     looked_up = []
     original = alio.attachments
     alio.attachments = lambda seq: (looked_up.append(seq), original(seq))[1]
     service.enrich_interests()
-    assert alio.downloads == ["77", "79"]
+    assert alio.downloads == ["77", "78", "79"]
     assert looked_up == []  # 상세페이지도 안 본다
 
 
@@ -150,7 +152,7 @@ def test_a_replaced_notice_is_re_read_once_the_cooldown_passes(tmp_path, monkeyp
     # 기관이 공고문을 교체하면 fileNo가 바뀌므로 다시 받는다.
     alio.notice = Attachment("99", "공고문.pdf")
     service.enrich_interests()
-    assert alio.downloads == ["77", "79", "99", "79"]
+    assert alio.downloads == ["77", "78", "79", "99", "78", "79"]
 
 
 def test_an_unchanged_notice_is_not_downloaded_again_after_the_cooldown(tmp_path, monkeypatch):
@@ -159,7 +161,7 @@ def test_an_unchanged_notice_is_not_downloaded_again_after_the_cooldown(tmp_path
     _age_extractions(service, service_module.EXTRACTION_COOLDOWN + timedelta(hours=1))
 
     service.enrich_interests()  # 상세페이지는 보지만 같은 fileNo라 받지는 않는다
-    assert alio.downloads == ["77", "79"]
+    assert alio.downloads == ["77", "78", "79"]
 
 
 def _age_extractions(service, age):
