@@ -134,10 +134,33 @@ def _ocr_pdf_images(reader) -> str | None:
     return text if len(text.strip()) > _MIN_TEXT else None
 
 
+# 압축 안 문서를 몇 개까지 읽을지. 한국해양교통안전공단은 직무기술서 8개를 한 번에
+# 올린다. 다 이어 붙이면 길기만 하므로 앞쪽만 본다.
+_MAX_ZIP_DOCUMENTS = 8
+
+
 def _zip_text(data: bytes) -> str | None:
-    inner = _zip_pdf_bytes(data)
-    if inner:
-        return _pdf_text(inner)
+    """압축 안의 문서를 순서대로 읽어 이어 붙인다.
+
+    직무기술서를 채용분야별로 나눠 담아 올리는 기관이 있다(한국해양교통안전공단은
+    HWP 8개, 시청자미디어재단은 PDF 3개). 첫 파일만 읽으면 나머지 분야를 통째로
+    놓치므로 읽을 수 있는 것을 모두 읽는다.
+    """
+    readers = {".pdf": _pdf_text, ".hwp": _hwp_text}
+    parts: list[str] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = [n for n in sorted(archive.namelist())
+                     if n.lower().endswith(tuple(readers))]
+            for name in names[:_MAX_ZIP_DOCUMENTS]:
+                extension = "." + name.rsplit(".", 1)[-1].lower()
+                text = readers[extension](archive.read(name))
+                if text:
+                    parts.append(text)
+    except (zipfile.BadZipFile, KeyError) as error:
+        log.warning("ZIP 첨부 처리 실패: %s", error)
+    if parts:
+        return "\n".join(parts)
     # 자기소개서를 화면 캡처 PNG로만 올리는 기관도 있다(시청자미디어재단, 한국고용노동교육원).
     return _zip_image_text(data)
 

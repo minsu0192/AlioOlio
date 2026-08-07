@@ -256,7 +256,8 @@ class SyncService:
         document = next(iter(attachments["job_description"]), None)
         if document is None:
             return {}
-        found = extract_profile(to_tables(document, self.alio.download(document)))
+        data = self.alio.download(document)
+        found = extract_profile(to_tables(document, data), to_text(document, data))
         log.info("직무기술서에서 %d개 항목 (%s)", len(found), document.name)
         return found
 

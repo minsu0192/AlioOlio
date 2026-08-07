@@ -29,7 +29,9 @@ _MAX_FIELD = 1500
 
 # 문서마다 다른 글머리표를 하나로 맞춘다. "ㅇ"과 영문 "o"를 글머리표로 쓰는 기관도
 # 있어 낱자로 떨어져 있을 때만 바꾼다(영어 단어 속 o까지 건드리면 안 된다).
-_BULLET = re.compile(r"[○◦●▪·]\s*|(?:(?<=^)|(?<=\s))[ㅇo](?=\s)")
+# "ㅇ"은 낱자라 정상적인 한국어 낱말에는 나오지 않으므로 붙여 써도 글머리표로 본다
+# ("ㅇ부동산 가격공시"). 영문 o는 낱자로 떨어져 있을 때만 바꾼다.
+_BULLET = re.compile(r"[○◦●▪·ㅇ]\s*|(?:(?<=^)|(?<=\s))o(?=\s)")
 # "○ ○"처럼 글머리표가 겹쳐 찍힌 자리는 하나로 줄인다.
 _REPEATED_BULLET = re.compile(r"(?:·\s*){2,}")
 
@@ -46,14 +48,52 @@ def _label_of(cell: str) -> str | None:
     return None
 
 
+# 항목 이름 뒤에 꼬리말을 붙이는 문서가 있다("공단 주요 사업 소개").
+_LABEL_TAIL = re.compile(r"^\s*(?:소개|안내|내용)\s+")
+
+
 def _clean(value: str) -> str:
-    text = normalize_cell(value)
+    text = _LABEL_TAIL.sub("", normalize_cell(value))
     text = _BULLET.sub(" · ", text)
     text = _REPEATED_BULLET.sub("· ", text)
     return re.sub(r"\s+", " ", text).strip(" ·")
 
 
-def extract_profile(tables: list[list[list[str]]]) -> dict[str, str]:
+# 본문에서 값의 끝을 알려 주는 다른 항목 이름. 여기 없는 이름이 중간에 끼면 그 항목
+# 내용까지 앞 항목에 딸려 들어간다.
+_OTHER_LABELS = (
+    "능력단위", "자격기준", "관련자격증", "직무수행태도", "참고사이트", "참고",
+    "분류체계", "채용분야", "전형방법", "지원요건", "지원자격", "일반요건", "교육요건",
+    "필요자격", "우대사항", "직무수행내용", "필요지식", "필요기술",
+    "직업기초능력", "직업공통능력", "주요사업",
+)
+# HWP는 "필요 지식"처럼 띄어 쓴다. 글자 사이 공백을 허용해 찾는다.
+_SPACED = {name: r"\s*".join(name) for name in _OTHER_LABELS}
+_ANY_LABEL = re.compile("|".join(rf"(?:{pattern})" for pattern in _SPACED.values()))
+
+
+def extract_profile_from_text(text: str) -> dict[str, str]:
+    """표 구조가 없는 직무기술서(HWP)를 본문에서 읽는다.
+
+    HWP v5는 표 정보를 남기지 않아 라벨과 값이 한 줄로 이어져 나온다. 아는 항목
+    이름이 나오는 자리를 모두 찾아, 한 항목의 값은 다음 항목 이름 직전까지로 본다.
+    """
+    flat = normalize_cell(text)
+    marks = [(m.start(), m.end(), re.sub(r"\s+", "", m.group())) for m in _ANY_LABEL.finditer(flat)]
+    found: dict[str, list[str]] = {field: [] for field in LABELS}
+    for index, (_start, end, name) in enumerate(marks):
+        field = next((f for f, names in LABELS.items()
+                      if any(name.startswith(n) or name.endswith(n) for n in names)), None)
+        if field is None:
+            continue
+        stop = marks[index + 1][0] if index + 1 < len(marks) else len(flat)
+        value = _clean(flat[end:stop])
+        if len(value) >= _MIN_VALUE and value not in found[field]:
+            found[field].append(value)
+    return {field: _fit("\n".join(values)) for field, values in found.items() if values}
+
+
+def extract_profile(tables: list[list[list[str]]], text: str | None = None) -> dict[str, str]:
     """직무기술서 표에서 노션에 채울 값을 뽑는다.
 
     한 문서에 채용분야가 여럿이면(한수원은 사무·기계·전기전자…) 같은 라벨이 여러 번
@@ -72,7 +112,9 @@ def extract_profile(tables: list[list[list[str]]]) -> dict[str, str]:
                     if value not in found[field]:
                         found[field].append(value)
                     break
-    return {field: _fit("\n".join(values)) for field, values in found.items() if values}
+    profile = {field: _fit("\n".join(values)) for field, values in found.items() if values}
+    # HWP처럼 표 정보가 없는 문서는 본문에서 읽는다.
+    return profile or (extract_profile_from_text(text) if text else {})
 
 
 def _fit(value: str) -> str:
