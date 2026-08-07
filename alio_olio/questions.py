@@ -48,6 +48,14 @@ _PRIVATE_USE = re.compile("[\uf000-\uf8ff]")
 
 MAX_QUESTIONS = 20
 
+# 지원서 양식을 따로 올리지 않고 공고문에 문항 주제만 늘어놓는 기관이 있다
+# (근로복지공단: "조직이해/지원동기, 직무이해/자기개발, … (각 문항별 500자 이내 작성)").
+# 물어보는 문장이 없어 일반 규칙으로는 하나도 못 건진다.
+_TOPIC_LIST = re.compile(
+    r"([^\n:：]{10,200}?)\s*\(\s*각\s*문항\s*별?\s*([\d,]+)\s*자\s*이내[^)]*\)")
+# 주제 목록이라고 인정하려면 자기소개서 이야기가 가까이 있어야 한다.
+_TOPIC_CONTEXT = 400
+
 
 def pick_form(attachments: dict[str, list[Attachment]]) -> Attachment | None:
     """자소서 문항이 들어 있을 첨부를 고른다.
@@ -108,6 +116,28 @@ def merge_continuations(questions: list[str]) -> list[str]:
         else:
             merged.append(text)
     return merged
+
+
+def extract_topics(text: str) -> list[str]:
+    """공고문에 문항 주제만 적어 둔 경우를 읽는다.
+
+    "조직이해/지원동기, 직무이해/자기개발, … (각 문항별 500자 이내 작성)" 처럼
+    묻는 문장 없이 주제만 쉼표로 늘어놓는다. 자기소개서 이야기 가까이에 있고
+    문항별 글자 수가 붙어 있을 때만 문항으로 본다.
+    """
+    flat = normalize_cell(text)
+    for match in _TOPIC_LIST.finditer(flat):
+        # 매치가 앞머리까지 삼키기도 하므로 매치 안쪽을 포함해 살핀다.
+        context = flat[max(0, match.end() - _TOPIC_CONTEXT):match.end()]
+        if "자기소개서" not in context:
+            continue
+        # 앞머리의 안내 문구를 떼고 주제만 남긴다.
+        listed = re.split(r"[-−–]\s*", match.group(1))[-1]
+        topics = [topic.strip(" ·") for topic in listed.split(",")]
+        topics = [topic for topic in topics if 2 <= len(topic) <= 40]
+        if len(topics) >= 2:
+            return [f"{topic} ({match.group(2)}자 이내)" for topic in topics]
+    return []
 
 
 def _add(found: list[str], questions: list[str]) -> None:

@@ -1,5 +1,6 @@
 from alio_olio.attachments import Attachment
-from alio_olio.questions import (extract_questions, format_questions, merge_continuations,
+from alio_olio.questions import (extract_questions, extract_topics, format_questions,
+                                 merge_continuations,
                                  normalize_cell, pick_form)
 
 # 한국수력원자력 자기소개서 양식의 실제 셀. 굵은 글씨가 글자마다 두 번 찍혀 있다.
@@ -192,3 +193,22 @@ def test_a_question_split_by_a_line_break_is_put_back_together():
         "수행하고 싶은 직무를 선택하고 그 이유를 기술하시오 또한 해당 직무에서 어떻게 기여하고 싶은지 기술해 주십시오",
         "핵심 역량은 무엇인지 서술해 주십시오",
     ]
+
+
+def test_topics_listed_in_the_notice_count_as_questions():
+    """근로복지공단은 지원서 양식을 안 올리고 공고문에 주제만 늘어놓는다."""
+    body = ("4. 서류전형 평가기준 자기소개서(적/부) □ NCS직업기초능력을 반영한 자기소개서 적ㆍ부 평가 "
+            "- 조직이해/지원동기, 직무이해/자기개발, 의사소통능력/대인관계능력, "
+            "문제해결능력/자원관리능력, 직업윤리 (각 문항별 500자 이내 작성)")
+    assert extract_topics(body) == [
+        "조직이해/지원동기 (500자 이내)",
+        "직무이해/자기개발 (500자 이내)",
+        "의사소통능력/대인관계능력 (500자 이내)",
+        "문제해결능력/자원관리능력 (500자 이내)",
+        "직업윤리 (500자 이내)",
+    ]
+
+
+def test_a_list_with_a_length_limit_is_not_a_question_without_the_cover_letter_context():
+    """자기소개서 이야기가 없으면 그냥 평가 항목 나열이다."""
+    assert extract_topics("평가항목: 교육사항, 자격사항, 경력사항 (각 문항별 500자 이내 작성)") == []

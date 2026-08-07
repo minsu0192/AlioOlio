@@ -11,8 +11,8 @@ from .config import Settings
 from .domain import Posting
 from .filters import matches
 from .job_description import extract_profile
-from .notion import NotionClient
-from .questions import extract_questions, format_questions, pick_form
+from .notion import NotionClient, _is_empty as _is_blank
+from .questions import extract_questions, extract_topics, format_questions, pick_form
 from .schedule import STAGES, resolve, stages_in_process
 from .storage import Storage
 from .telegram import TelegramClient
@@ -20,7 +20,7 @@ from .telegram import TelegramClient
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 6
+EXTRACTION_VERSION = 8
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -205,7 +205,7 @@ class SyncService:
             job_description_url=extraction["job_description_url"],
             profile=extraction.get("profile", {}),
             questions=extraction.get("questions", ""),
-            memo=extraction["memo"],
+            memo=self._memo_for(page, dates, extraction["memo"]),
         )
         log.info("공고 %s: 날짜 %d개 추출, 노션 %d개 기록", posting.seq, len(dates), len(written))
 
@@ -245,7 +245,7 @@ class SyncService:
                        for field, hit in hits.items()},
             "job_description_url": self._first_url(attachments["job_description"]),
             "profile": self._profile(attachments),
-            "questions": self._questions(attachments),
+            "questions": self._questions(attachments, text),
             "memo": self._memo(posting, notice, text, tables, hits, attachments),
         }
         self.storage.set_extraction(posting.seq, file_no, result)
@@ -261,32 +261,56 @@ class SyncService:
         log.info("직무기술서에서 %d개 항목 (%s)", len(found), document.name)
         return found
 
-    def _questions(self, attachments: dict) -> str:
-        """자소서 문항은 공고문이 아니라 입사지원서·자기소개서 양식에 들어 있다."""
+    def _questions(self, attachments: dict, notice_text: str | None = None) -> str:
+        """자소서 문항은 보통 입사지원서·자기소개서 양식에 들어 있다.
+
+        양식을 아예 안 올리는 기관도 있다. 근로복지공단은 공고문 안에 문항 주제만
+        늘어놓으므로("조직이해/지원동기, … 각 문항별 500자 이내") 그것이라도 건진다.
+        """
         form = pick_form(attachments)
-        if form is None:
-            return ""
-        data = self.alio.download(form)
-        found = extract_questions(to_tables(form, data), to_text(form, data))
-        log.info("자소서 문항 %d개 (%s)", len(found), form.name)
-        return format_questions(found)
+        if form is not None:
+            data = self.alio.download(form)
+            found = extract_questions(to_tables(form, data), to_text(form, data))
+            if found:
+                log.info("자소서 문항 %d개 (%s)", len(found), form.name)
+                return format_questions(found)
+        topics = extract_topics(notice_text) if notice_text else []
+        if topics:
+            log.info("자소서 문항 주제 %d개 (공고문)", len(topics))
+        return format_questions(topics)
 
     def _first_url(self, attachments: list) -> str:
         first = next(iter(attachments), None)
         return first.url(self.settings.alio_base_url) if first else ""
 
+    def _memo_for(self, page: dict, dates: dict[str, str], memo: str) -> str:
+        """공고문에서 읽은 메모에, 지금 노션에서 비어 있는 단계를 덧붙인다.
+
+        비었는지는 노션 현재 상태를 봐야 안다. 추출 결과만 보고 적으면 손으로 채워
+        넣은 날짜까지 "직접 채워야 한다"고 하게 된다.
+        """
+        properties = page.get("properties", {})
+        empty = [field for field in STAGES
+                 if field not in dates and _is_blank(properties.get(field))]
+        if not empty:
+            return memo
+        return "\n".join(["직접 채워야 하는 단계: " + ", ".join(empty), memo]).strip()
+
     def _memo(self, posting: Posting, notice, text: str | None, tables: list,
               hits: dict, attachments: dict) -> str:
+        # 손댈 거리만 남긴다. 뽑은 날짜는 날짜 칸에 이미 들어 있고, 어느 경로로
+        # 읽었는지·표를 몇 개 읽었는지는 만드는 사람 사정이지 보는 사람 정보가 아니다.
+        # 근거 문장도 넣지 않는다. 공백을 모두 지운 원문 조각이라 읽을 수 없고
+        # ("...합격자발표:’26.9.11.(금)"), 굵은 글씨를 두 번 찍는 PDF는 "토토"처럼
+        # 겹쳐 나온다. 확인이 필요하면 아래 공고문 링크를 연다(근거는 로그에 남는다).
         lines = []
         if notice is None:
-            lines.append("공고문 첨부 없음 — 전형 일정을 직접 입력해야 합니다.")
+            lines.append("공고문 첨부가 없습니다. 전형 일정을 직접 입력해야 합니다.")
         elif text is None and not tables:
             lines.append(f"공고문({notice.extension or '형식 불명'})에서 글자를 읽지 못했습니다. "
                          "스캔 이미지 공고문이면 직접 입력해야 합니다.")
-        else:
-            lines.append(f"추출 경로: {'표' if tables else '본문'} / 읽은 표 {len(tables)}개")
-        lines += [f"{field}: {hit.day} ← {hit.evidence}" for field, hit in hits.items()]
-        # 문항을 못 뽑았을 때 원본을 바로 열어볼 수 있도록 첨부 링크는 항상 남긴다.
+        # 무엇이 비었는지는 노션 현재 상태를 봐야 알 수 있으므로 여기서 적지 않는다.
+        # 손으로 채워 넣은 날짜까지 "직접 채워야 한다"고 하면 거짓말이 된다.
         for label, key in (("공고문", "notice"), ("입사지원서", "application"), ("기타", "etc")):
             for item in attachments[key][:2]:
                 lines.append(f"[{label}] {item.name} {item.url(self.settings.alio_base_url)}")
