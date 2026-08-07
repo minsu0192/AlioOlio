@@ -1,5 +1,6 @@
 from alio_olio.attachments import Attachment
-from alio_olio.questions import extract_questions, normalize_cell, pick_form
+from alio_olio.questions import (extract_questions, format_questions, merge_continuations,
+                                 normalize_cell, pick_form)
 
 # 한국수력원자력 자기소개서 양식의 실제 셀. 굵은 글씨가 글자마다 두 번 찍혀 있다.
 DOUBLED_MAIN = (
@@ -150,3 +151,44 @@ def test_document_handling_instructions_are_not_questions():
     assert extract_questions([], "경력증명서 등으로 추후 증빙 가능한 사항만 작성하시오") == []
     assert extract_questions(
         [], "건강보험자격득실확인서 발급이 가능한 경우에만 해당 내용을 기술해 주십시오") == []
+
+
+def test_numbering_makes_each_question_visible():
+    """줄글로 이어 붙이면 어디서 문항이 끊기는지 안 보인다."""
+    assert format_questions(["[조직이해] 지원 동기를 기술해 주십시오",
+                             "[전문역량] 보유 역량을 기술해 주십시오"]) == (
+        "1. [조직이해] 지원 동기를 기술해 주십시오\n"
+        "\n"
+        "2. [전문역량] 보유 역량을 기술해 주십시오")
+
+
+def test_own_numbering_survives_under_its_parent():
+    """한수원처럼 대문항 아래 1-1, 1-2로 갈리는 양식은 그 번호를 살려 들여쓴다."""
+    assert format_questions(["관련 경험을 기술해 주십시오",
+                             "1-1. 언제, 어디서 하셨는지 기술해 주십시오",
+                             "1-2. 개발한 역량을 기술해 주십시오",
+                             "핵심 가치를 기술해 주십시오"]) == (
+        "1. 관련 경험을 기술해 주십시오\n"
+        "    1-1. 언제, 어디서 하셨는지 기술해 주십시오\n"
+        "    1-2. 개발한 역량을 기술해 주십시오\n"
+        "\n"
+        "2. 핵심 가치를 기술해 주십시오")
+
+
+def test_questions_that_all_carry_numbers_are_only_spaced_out():
+    assert format_questions(["① 지원 동기를 기술해 주십시오",
+                             "② 보유 역량을 기술해 주십시오"]) == (
+        "① 지원 동기를 기술해 주십시오\n\n② 보유 역량을 기술해 주십시오")
+
+
+def test_a_question_split_by_a_line_break_is_put_back_together():
+    """"또한 ~"은 새 문항을 여는 말이 아니라 앞 문항의 뒷부분이다. 번호를 매기면
+    있지도 않은 문항이 하나 더 생겨 버린다."""
+    assert merge_continuations([
+        "수행하고 싶은 직무를 선택하고 그 이유를 기술하시오",
+        "또한 해당 직무에서 어떻게 기여하고 싶은지 기술해 주십시오",
+        "핵심 역량은 무엇인지 서술해 주십시오",
+    ]) == [
+        "수행하고 싶은 직무를 선택하고 그 이유를 기술하시오 또한 해당 직무에서 어떻게 기여하고 싶은지 기술해 주십시오",
+        "핵심 역량은 무엇인지 서술해 주십시오",
+    ]

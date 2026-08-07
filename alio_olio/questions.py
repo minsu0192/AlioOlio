@@ -85,7 +85,29 @@ def extract_questions(tables: list[list[list[str]]], text: str | None = None) ->
         flat = normalize_cell(text)
         _add(found, _text_questions(flat))
         _add(found, _bracket_questions(flat))
-    return found[:MAX_QUESTIONS]
+    return merge_continuations(found)[:MAX_QUESTIONS]
+
+
+# 문항을 새로 여는 말이 아니라 앞 문항을 잇는 말. 이런 말로 시작하는 조각은
+# 원래 한 문항인데 양식의 줄바꿈 때문에 둘로 잘린 것이다.
+_CONTINUATION = re.compile(r"^(?:또한|아울러|그리고|이와\s*함께|더불어)\s")
+
+
+def merge_continuations(questions: list[str]) -> list[str]:
+    """잘린 문항을 앞 문항에 도로 붙인다.
+
+    한국부동산원 양식은 "…이유를 기술하시오 / 또한 해당 사업에서 어떻게 기여하고
+    싶은지 기술해 주십시오"가 두 줄이라 두 문항으로 잡혔다. 번호를 매기면 없는
+    2번 문항이 생겨 버린다.
+    """
+    merged: list[str] = []
+    for question in questions:
+        text = question.strip()
+        if merged and _CONTINUATION.match(text):
+            merged[-1] = f"{merged[-1]} {text}"
+        else:
+            merged.append(text)
+    return merged
 
 
 def _add(found: list[str], questions: list[str]) -> None:
@@ -180,5 +202,30 @@ def _is_question(text: str) -> bool:
     return bool(_ASKED.search(stripped))
 
 
+# 공고가 스스로 붙여 둔 문항 번호. "1-1.", "2)", "①" 처럼 여러 표기를 쓴다.
+_OWN_NUMBER = re.compile(r"^\s*(?:\d{1,2}\s*[-–~]\s*\d{1,2}|\d{1,2}|[①-⑮])\s*[.)]?\s")
+
+
 def format_questions(questions: list[str]) -> str:
-    return "\n".join(questions)
+    """노션 속성에 넣을 문자열. 몇 번 문항인지 한눈에 보이게 번호를 매긴다.
+
+    줄글로 이어 붙이면 어디서 문항이 끊기는지 안 보인다. 문항 사이를 빈 줄로 띄우고
+    앞에 일련번호를 단다. 공고가 이미 "1-1." 처럼 번호를 달아 둔 문항은 그 번호를
+    살려 대문항 아래로 들여쓴다(한수원처럼 대문항-소문항으로 갈리는 양식이 있다).
+    """
+    if all(_OWN_NUMBER.match(q) for q in questions):
+        # 전부 제 번호를 달고 있으면 새 번호는 군더더기다. 띄우기만 한다.
+        return "\n\n".join(q.strip() for q in questions)
+
+    lines: list[str] = []
+    number = 0
+    for question in questions:
+        text = question.strip()
+        if _OWN_NUMBER.match(text) and number:
+            lines.append(f"    {text}")
+            continue
+        number += 1
+        if number > 1:
+            lines.append("")
+        lines.append(f"{number}. {text}")
+    return "\n".join(lines)
