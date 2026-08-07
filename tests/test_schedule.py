@@ -1,7 +1,7 @@
 from datetime import date
 from pathlib import Path
 
-from alio_olio.schedule import extract_schedule, normalize, stages_in_process
+from alio_olio.schedule import extract_schedule, normalize, resolve, stages_in_process
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -80,3 +80,25 @@ def test_a_long_prose_cell_is_not_treated_as_a_date_header():
               ["면접전형", "8. 19.(수)", ""],
               ["최종합격자 발표", "8. 21.(금)", ""]]
     assert pick_schedule_table([proper]) is proper
+
+
+def test_an_announcement_without_a_stage_name_is_tied_to_its_section():
+    """"필기전형 •일시: … •합격자발표: 10.2." 처럼 발표 줄에 전형 이름이 없는 양식.
+
+    절 머리말에 묶어 읽는다. 설명문에 나오는 "서류전형 합격자에 한하여" 같은 말은
+    항목 기호가 없으므로 절 머리말로 세지 않는다.
+    """
+    body = ("서류전형•선발방법: 자기소개서 평가 •합격자발표: ’26.9.11.(금) "
+            "필기전형•일시: ’26.9.19.(토) •장소: 서류전형 합격자에 한하여 별도 안내 "
+            "•합격자발표: ’26.10.2.(금)")
+    found = resolve(body, [], date(2026, 8, 5))
+    assert found["서류발표일"].day == date(2026, 9, 11)
+    assert found["필기일정"].day == date(2026, 9, 19)
+    assert found["필기발표일"].day == date(2026, 10, 2)
+
+
+def test_a_submission_window_opening_at_an_announcement_is_not_a_date():
+    """"필기합격자발표시 ∼ 10.14."는 증빙서류 등록 기간이지 발표일이 아니다."""
+    body = ("필기전형•일시: ’26.9.19.(토) •합격자발표: ’26.10.2.(금) "
+            "증빙서류 사전등록 •일시: ’26.10.2.(금) 필기합격자발표시 ∼ ’26.10.14.(수)")
+    assert resolve(body, [], date(2026, 8, 5))["필기발표일"].day == date(2026, 10, 2)

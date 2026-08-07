@@ -293,6 +293,38 @@ def validate(found: dict[str, ScheduleHit], reference: date) -> dict[str, Schedu
     return kept
 
 
+# 전형 이름 바로 뒤에 항목 기호가 붙은 자리만 그 전형의 절이 열리는 머리말로 본다.
+# 본문에는 "장소: 서류전형 합격자에 한하여 별도 안내"처럼 다른 전형을 가리키는 말도
+# 섞여 있어서, 가장 가까운 언급을 그대로 믿으면 엉뚱한 절에 묶인다.
+_SECTION_HEAD = re.compile(r"(서류|필기|면접)전형(?=[•·])")
+# "최종합격자발표"는 제 이름을 달고 있으니 절에 묶을 필요가 없다.
+_BARE_ANNOUNCE = re.compile(rf"(?<!최종)합격자발표(?!시)[^0-9]{{0,6}}(?P<date>{_DATE})")
+# 절 머리말에서 이만큼 떨어지면 다른 이야기로 본다. 근로복지공단의 필기 발표는 278자다.
+_SECTION_REACH = 400
+
+
+def section_announcements(text: str, reference: date) -> dict[str, ScheduleHit]:
+    """절 안에 "합격자발표: 9.11."로만 적어 둔 공고를 읽는다.
+
+    "필기전형 •일시: 9.19. •장소: … •합격자발표: 10.2."처럼 전형 이름이 절 머리에만
+    나오고 발표 줄에는 안 붙는 양식이 있다. 그 줄만 보면 어느 전형의 발표인지 알 수
+    없으므로 바로 앞 절 머리말에 묶는다(근로복지공단에서 확인).
+    """
+    flat = normalize(text)
+    heads = [(m.start(), m.group(1)) for m in _SECTION_HEAD.finditer(flat)]
+    found: dict[str, ScheduleHit] = {}
+    for match in _BARE_ANNOUNCE.finditer(flat):
+        prior = [head for head in heads if head[0] < match.start()]
+        if not prior:
+            continue
+        position, stage = prior[-1]
+        if match.start() - position > _SECTION_REACH:
+            continue
+        day = _to_date(re.match(_DATE, match.group("date")), reference)
+        _record(found, stage, True, day, flat[position:match.end()][-80:])
+    return found
+
+
 def resolve(text: str | None, tables: list[list[list[str]]], reference: date) -> dict[str, ScheduleHit]:
     """표를 먼저 읽고, 빠진 필드만 본문 정규식으로 보충한 뒤 앞뒤를 검사한다."""
     found: dict[str, ScheduleHit] = {}
@@ -301,6 +333,9 @@ def resolve(text: str | None, tables: list[list[list[str]]], reference: date) ->
         found.update(parse_schedule_table(table, reference))
     if text:
         for field, hit in extract_schedule(text, reference).items():
+            found.setdefault(field, hit)
+        # 이름을 제대로 단 라벨을 다 쓰고도 남은 칸만 절 구조로 채운다.
+        for field, hit in section_announcements(text, reference).items():
             found.setdefault(field, hit)
     return validate(found, reference)
 
