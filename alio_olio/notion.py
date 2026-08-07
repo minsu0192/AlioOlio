@@ -298,25 +298,44 @@ class NotionClient:
             ]}
         })
 
-    def ensure_application(self, application_data_source_id: str, posting: Posting) -> str:
+    def ensure_application(self, application_data_source_id: str, posting: Posting,
+                           posting_page_id: str = "") -> str:
         existing = self.query(application_data_source_id, {
             "filter": {"property": "공고링크", "url": {"equals": posting.url}}, "page_size": 1,
         })
         if existing:
+            if posting_page_id:
+                self.link_application(existing[0], posting_page_id)
             return existing[0]["url"]
+        properties: dict[str, Any] = {
+            "회사명": {"title": _text(posting.organization)},
+            "공고링크": {"url": posting.url},
+            "마감일": {"date": {"start": posting.end_date.isoformat()}},
+            "유형": {"select": {"name": "공공기관"}},
+            "진행상태": {"status": {"name": "시작 전"}},
+            "결과": {"select": {"name": "미제출"}},
+            "직무": {"rich_text": _text(", ".join(posting.work_areas or posting.ncs))},
+        }
+        if posting_page_id:
+            properties["ALIO 공고"] = {"relation": [{"id": posting_page_id}]}
         page = self.request("POST", "/pages", json={
             "parent": {"type": "data_source_id", "data_source_id": application_data_source_id},
-            "properties": {
-                "회사명": {"title": _text(posting.organization)},
-                "공고링크": {"url": posting.url},
-                "마감일": {"date": {"start": posting.end_date.isoformat()}},
-                "유형": {"select": {"name": "공공기관"}},
-                "진행상태": {"status": {"name": "시작 전"}},
-                "결과": {"select": {"name": "미제출"}},
-                "직무": {"rich_text": _text(", ".join(posting.work_areas or posting.ncs))},
-            },
+            "properties": properties,
         })
         return page["url"]
+
+    def link_application(self, application_page: dict, posting_page_id: str) -> bool:
+        """지원 현황 행을 공고 쪽에 이어 붙인다. 이미 이어져 있으면 건드리지 않는다."""
+        linked = application_page["properties"].get("ALIO 공고", {}).get("relation", [])
+        if any(item["id"].replace("-", "") == posting_page_id.replace("-", "") for item in linked):
+            return False
+        self.request("PATCH", f"/pages/{application_page['id']}", json={"properties": {
+            "ALIO 공고": {"relation": linked + [{"id": posting_page_id}]}
+        }})
+        return True
+
+    def applications(self, application_data_source_id: str) -> list[dict]:
+        return self.query(application_data_source_id)
 
     def set_application_link(self, posting_page_id: str, application_url: str) -> None:
         self.request("PATCH", f"/pages/{posting_page_id}", json={

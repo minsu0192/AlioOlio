@@ -40,6 +40,7 @@ class FakeAlio:
 class FakeNotion:
     def __init__(self, interests=None):
         self.interests = interests or []
+        self.applications_rows = []
         self.detail_updates = []
         self.questions = []
         self.events = []
@@ -52,6 +53,10 @@ class FakeNotion:
     def upsert_posting(self, _ds, posting, matched, page_id, delivered):
         return page_id or f"page-{posting.seq}"
     def application_requests(self, _):
+        return []
+    def applications(self, _):
+        return self.applications_rows
+    def query(self, _ds, payload=None):
         return []
     def interest_postings(self, _):
         return self.interests
@@ -71,8 +76,11 @@ class FakeNotion:
 class FakeTelegram:
     def __init__(self):
         self.sent = []
+        self.reminded = []
     def send_posting(self, posting):
         self.sent.append(posting.seq)
+    def send_reminder(self, posting, days_left):
+        self.reminded.append((posting.seq, days_left))
 
 
 def test_baseline_then_catchup_notifies_once(tmp_path):
@@ -168,3 +176,58 @@ def test_attachment_failure_does_not_break_sync(tmp_path, monkeypatch):
     assert service.sync()["seen"] == 1
     assert notion.detail_updates == []
     assert service.storage.get_meta("last_successful_sync") is not None
+
+
+def application_row(page_id: str, status: str, posting_page_id: str = "", url: str = "") -> dict:
+    return {"id": page_id, "url": f"https://notion.so/{page_id}", "properties": {
+        "진행상태": {"type": "status", "status": {"name": status}},
+        "ALIO 공고": {"type": "relation",
+                     "relation": [{"id": posting_page_id}] if posting_page_id else []},
+        "공고링크": {"type": "url", "url": url},
+    }}
+
+
+def test_alio_seq_is_read_from_both_url_shapes():
+    assert service_module.alio_seq("https://www.alio.go.kr/information/informationRecruitDtl.do?seq=302968") == 302968
+    assert service_module.alio_seq("https://job.alio.go.kr/mobile2021/recruit/recruitView.do?idx=303139") == 303139
+    # 기관 자체 채용 페이지는 공고 번호가 없다. 이름이 비슷하다고 이으면 안 된다.
+    assert service_module.alio_seq("https://www.nhis.or.kr/nhis/together/wbhaea02700m01.do?articleNo=11") is None
+    assert service_module.alio_seq(None) is None
+
+
+def _reminder_service(tmp_path, monkeypatch, end_date, status=None):
+    settings = Settings("n", "p", "t", "c", database_path=str(tmp_path / "db"),
+                        notion_application_data_source_id="apps")
+    alio, notion = FakeAlio(), FakeNotion([interest_page(1)])
+    alio.items = [Posting(1, "기관", "공고 1", date.today(), end_date, date.today(),
+                          employment_types=["정규직"], url="https://alio/1")]
+    notion.applications_rows = ([application_row("app-1", status, "page-1")] if status else [])
+    monkeypatch.setattr(service_module, "to_text", lambda attachment, data: alio.notice_text)
+    service = SyncService(settings, Storage(settings.database_path), alio, notion, FakeTelegram())
+    service.sync()
+    return service
+
+
+def test_a_deadline_within_three_days_is_reminded(tmp_path, monkeypatch):
+    service = _reminder_service(tmp_path, monkeypatch, date.today() + timedelta(days=3))
+    assert [left for _posting, left in service.pending_submissions()] == [3]
+    assert service.remind_submissions() == 1
+    assert service.telegram.reminded == [(1, 3)]
+
+
+def test_a_submitted_application_is_not_reminded(tmp_path, monkeypatch):
+    """지원 현황이 "완료"면 이미 낸 것이므로 찌르지 않는다."""
+    service = _reminder_service(tmp_path, monkeypatch, date.today() + timedelta(days=2), "완료")
+    assert service.pending_submissions() == []
+
+
+def test_an_application_still_in_progress_is_reminded(tmp_path, monkeypatch):
+    service = _reminder_service(tmp_path, monkeypatch, date.today() + timedelta(days=1), "진행 중")
+    assert [left for _posting, left in service.pending_submissions()] == [1]
+
+
+def test_deadlines_further_out_and_already_past_are_left_alone(tmp_path, monkeypatch):
+    far = _reminder_service(tmp_path, monkeypatch, date.today() + timedelta(days=4))
+    assert far.pending_submissions() == []
+    over = _reminder_service(tmp_path, monkeypatch, date.today() - timedelta(days=1))
+    assert over.pending_submissions() == []

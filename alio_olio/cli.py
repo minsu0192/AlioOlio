@@ -98,7 +98,12 @@ def main() -> None:
         scheduler.add_job(service.refresh_filters,
                           IntervalTrigger(minutes=settings.filter_refresh_minutes, timezone=settings.timezone),
                           id="filter_refresh", replace_existing=True, coalesce=True, max_instances=1)
-        log.info("동기화 %s시 정각, 필터 갱신 %d분마다", settings.sync_hours, settings.filter_refresh_minutes)
+        scheduler.add_job(service.remind_submissions,
+                          CronTrigger(hour=settings.reminder_hours, minute=0, timezone=settings.timezone),
+                          id="submission_reminder", replace_existing=True, coalesce=True, max_instances=1)
+        log.info("동기화 %s시 정각, 필터 갱신 %d분마다, 제출 리마인더 %s시 (마감 D-%d부터)",
+                 settings.sync_hours, settings.filter_refresh_minutes,
+                 settings.reminder_hours, settings.reminder_days)
         scheduler.start()
 
 

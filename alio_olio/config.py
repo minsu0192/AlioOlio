@@ -33,6 +33,9 @@ class Settings:
     # 곧 텔레그램이 오는 시간대다. 새벽에 알림이 울리지 않게 기본값을 좁혀 둔다.
     sync_hours: str = "7-19"
     filter_refresh_minutes: int = 15
+    # 관심 공고 마감이 다가오는데 아직 제출하지 않았으면 하루 두 번 찌른다.
+    reminder_hours: str = "14,19"
+    reminder_days: int = 3
 
     @classmethod
     def from_env(cls, require_integrations: bool = True) -> "Settings":
@@ -57,4 +60,6 @@ class Settings:
             alio_base_url=os.getenv("ALIO_BASE_URL", "https://www.alio.go.kr"),
             sync_hours=os.getenv("SYNC_HOURS", "7-19"),
             filter_refresh_minutes=int(os.getenv("FILTER_REFRESH_MINUTES", "15")),
+            reminder_hours=os.getenv("REMINDER_HOURS", "14,19"),
+            reminder_days=int(os.getenv("REMINDER_DAYS", "3")),
         )

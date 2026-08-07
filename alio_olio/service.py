@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 
 from .alio import AlioClient, process_section
@@ -23,6 +24,18 @@ EXTRACTION_VERSION = 5
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
 EXTRACTION_COOLDOWN = timedelta(hours=6)
+
+# 지원 현황의 "진행상태"가 이 값이면 제출을 마친 것으로 본다.
+SUBMITTED = "완료"
+
+# ALIO 공고 주소는 두 가지로 쓰인다. 웹은 ?seq=302968, 모바일 채용관은 ?idx=302968.
+_ALIO_SEQ = re.compile(r"alio\.go\.kr/.*[?&](?:seq|idx)=(\d+)")
+
+
+def alio_seq(url: str | None) -> int | None:
+    """공고 주소에서 ALIO 공고 번호를 뽑는다. ALIO 주소가 아니면 None."""
+    match = _ALIO_SEQ.search(url or "")
+    return int(match.group(1)) if match else None
 
 
 class SyncService:
@@ -96,6 +109,42 @@ class SyncService:
         self.storage.set_meta("last_successful_sync", datetime.now(timezone.utc).isoformat())
         self.storage.set_meta("last_sync_stats", json.dumps(stats, ensure_ascii=False))
         return stats
+
+    def pending_submissions(self, today: date | None = None) -> list[tuple[Posting, int]]:
+        """관심 공고 중 마감이 코앞인데 아직 제출하지 않은 것. (공고, 남은 날) 목록."""
+        resources = self.bootstrap()
+        today = today or date.today()
+        target = self.settings.notion_application_data_source_id
+        submitted: set[str] = set()
+        if target:
+            for row in self.notion.applications(target):
+                status = (row["properties"].get("진행상태", {}).get("status") or {}).get("name")
+                if status != SUBMITTED:
+                    continue
+                for item in row["properties"].get("ALIO 공고", {}).get("relation", []):
+                    submitted.add(item["id"].replace("-", ""))
+
+        by_seq = {posting.seq: posting for posting, _ in self.storage.postings()}
+        due: list[tuple[Posting, int]] = []
+        for page in self.notion.interest_postings(resources["posting_data_source_id"]):
+            seq = page["properties"].get("ALIO ID", {}).get("number")
+            posting = by_seq.get(int(seq)) if seq is not None else None
+            if posting is None or page["id"].replace("-", "") in submitted:
+                continue
+            left = (posting.end_date - today).days
+            if 0 <= left <= self.settings.reminder_days:
+                due.append((posting, left))
+        return sorted(due, key=lambda item: item[1])
+
+    def remind_submissions(self, today: date | None = None) -> int:
+        """마감이 다가온 관심 공고를 텔레그램으로 알린다. 예약 시각마다 한 번씩 보낸다."""
+        today = today or date.today()
+        sent = 0
+        for posting, left in self.pending_submissions(today):
+            self.telegram.send_reminder(posting, left)
+            sent += 1
+        log.info("제출 리마인더 %d건 발송", sent)
+        return sent
 
     def refresh_filters(self) -> int:
         resources = self.bootstrap()
@@ -239,5 +288,30 @@ class SyncService:
             prop = page["properties"].get("ALIO ID", {}).get("number")
             if prop is None or int(prop) not in by_seq:
                 continue
-            application_url = self.notion.ensure_application(target, by_seq[int(prop)])
+            application_url = self.notion.ensure_application(target, by_seq[int(prop)], page["id"])
             self.notion.set_application_link(page["id"], application_url)
+        self.link_applications(resources)
+
+    def link_applications(self, resources: dict[str, str]) -> int:
+        """지원 현황 행을 같은 공고에 이어 붙인다.
+
+        손으로 만든 행도 공고 링크만 있으면 이어진다. 기관명으로 맞추면 회차가 다른
+        공고나 이름이 비슷한 다른 기관(국민건강보험공단 ↔ 일산병원)에 붙으므로 쓰지
+        않는다. ALIO 주소에 들어 있는 공고 번호만 믿는다.
+        """
+        target = self.settings.notion_application_data_source_id
+        if not target:
+            return 0
+        pages_by_seq = {}
+        for page in self.notion.query(resources["posting_data_source_id"]):
+            seq = page["properties"].get("ALIO ID", {}).get("number")
+            if seq is not None:
+                pages_by_seq[int(seq)] = page["id"]
+        linked = 0
+        for row in self.notion.applications(target):
+            seq = alio_seq(row["properties"].get("공고링크", {}).get("url"))
+            if seq in pages_by_seq:
+                linked += int(self.notion.link_application(row, pages_by_seq[seq]))
+        if linked:
+            log.info("지원 현황 %d건을 공고에 연결했습니다", linked)
+        return linked
