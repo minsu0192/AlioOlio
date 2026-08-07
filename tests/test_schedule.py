@@ -1,7 +1,8 @@
 from datetime import date
 from pathlib import Path
 
-from alio_olio.schedule import extract_schedule, normalize, resolve, stages_in_process
+from alio_olio.schedule import (ScheduleHit, extract_schedule, normalize, readable_evidence,
+                                resolve, stages_in_process)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -102,3 +103,35 @@ def test_a_submission_window_opening_at_an_announcement_is_not_a_date():
     body = ("필기전형•일시: ’26.9.19.(토) •합격자발표: ’26.10.2.(금) "
             "증빙서류 사전등록 •일시: ’26.10.2.(금) 필기합격자발표시 ∼ ’26.10.14.(수)")
     assert resolve(body, [], date(2026, 8, 5))["필기발표일"].day == date(2026, 10, 2)
+
+
+def test_a_submission_deadline_is_not_the_stage_date():
+    """지금까지 잘못 읽은 날짜는 모두 "지원자가 그때까지 해야 하는 기한"이었다.
+
+    한수원은 8.31 추가정보 제출 마감을 필기일로, 근로복지공단은 증빙서류 등록
+    기간의 끝(10.14)을 필기 발표일로 읽었다. 둘 다 그럴듯해서 눈에 띄지 않았다.
+    """
+    khnp = "필기시험 응시 대상자는 8.31.(월) 11:00까지 추가정보 제출 필기시험 9.5.(토)"
+    assert resolve(khnp, [], date(2026, 7, 22))["필기일정"].day == date(2026, 9, 5)
+
+    comwel = "필기전형•일시: 9.19.(토) •합격자발표: ’26.10.2.(금) 필기합격자발표시 ∼ ’26.10.14.(수)"
+    assert resolve(comwel, [], date(2026, 8, 5))["필기발표일"].day == date(2026, 10, 2)
+
+
+def test_a_deadline_does_not_hide_the_real_date_behind_it():
+    """기한을 만나면 버리고 다음 후보를 본다. 거기서 멈추면 진짜 일정을 놓친다."""
+    body = "면접전형 서류 제출 9.1.(화)까지 면접전형 시행 9.10.(목)"
+    assert resolve(body, [], date(2026, 8, 1))["면접일정"].day == date(2026, 9, 10)
+
+
+def test_readable_evidence_is_taken_from_the_spaced_original():
+    """추출용 근거는 공백을 지운 판이라 못 읽는다. 원문에서 다시 찾아 준다."""
+    original = "○ 필기전형 합격자발표 : ’26. 10. 2.(금) (채용홈페이지 및 개인 SMS)"
+    hit = resolve(original, [], date(2026, 8, 5))["필기발표일"]
+    snippet = readable_evidence(original, hit)
+    assert "’26. 10. 2.(금)" in snippet
+    assert "  " not in snippet
+
+
+def test_no_evidence_rather_than_the_wrong_sentence():
+    assert readable_evidence("아무 상관 없는 문장", ScheduleHit(date(2026, 9, 5), "필기시험9.5")) is None

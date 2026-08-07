@@ -13,14 +13,14 @@ from .filters import matches
 from .job_description import extract_profile
 from .notion import NotionClient, _is_empty as _is_blank
 from .questions import extract_questions, extract_topics, format_questions, pick_form
-from .schedule import STAGES, resolve, stages_in_process
+from .schedule import STAGES, readable_evidence, resolve, stages_in_process
 from .storage import Storage
 from .telegram import TelegramClient
 
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 8
+EXTRACTION_VERSION = 10
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -309,6 +309,14 @@ class SyncService:
         elif text is None and not tables:
             lines.append(f"공고문({notice.extension or '형식 불명'})에서 글자를 읽지 못했습니다. "
                          "스캔 이미지 공고문이면 직접 입력해야 합니다.")
+        # 뽑은 날짜마다 원문 문장을 붙인다. 이 도구는 조용히 틀릴 수 있고(제출 기한을
+        # 시험일로 읽는 식), 틀린 값은 빈칸과 달리 눈에 띄지 않는다. 근거가 옆에 있으면
+        # 몇 초 만에 대조된다. 원문에서 못 찾으면 붙이지 않는다 — 엉뚱한 문장을
+        # 보여주는 것이 근거가 없는 것보다 나쁘다.
+        if text:
+            for field, hit in hits.items():
+                snippet = readable_evidence(text, hit)
+                lines.append(f"{field} {hit.day}" + (f"  ←  {snippet}" if snippet else ""))
         # 무엇이 비었는지는 노션 현재 상태를 봐야 알 수 있으므로 여기서 적지 않는다.
         # 손으로 채워 넣은 날짜까지 "직접 채워야 한다"고 하면 거짓말이 된다.
         for label, key in (("공고문", "notice"), ("입사지원서", "application"), ("기타", "etc")):

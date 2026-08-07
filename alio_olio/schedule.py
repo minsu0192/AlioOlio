@@ -85,12 +85,31 @@ def extract_schedule(text: str, reference: date) -> dict[str, ScheduleHit]:
     return found
 
 
+# 날짜가 "그 전형이 열리는 날"이 아니라 "지원자가 그때까지 무언가를 해야 하는 기한"임을
+# 알려주는 말. 전형 일정을 잘못 읽은 사례는 지금까지 모두 이 부류였다.
+#   "8.31.(월) 11:00까지"              → 추가정보 제출 마감 (필기일이 아니다)
+#   "필기합격자발표시 ∼ ’26.10.14.(수)" → 증빙서류 등록 기간의 끝 (발표일이 아니다)
+_DEADLINE_MARK = re.compile(r"시\s*[∼~-]|까지|이후|부터|전까지|익일|마감")
+# 날짜 바로 뒤에 붙는 기한 표지. "(월)11:00까지"처럼 시각이 끼어들 수 있다.
+_DEADLINE_TAIL = re.compile(r"^[\d:시분\s]{0,10}까지")
+
+
+def _is_deadline(gap: str, tail: str) -> bool:
+    """라벨과 날짜 사이, 또는 날짜 바로 뒤가 기한을 가리키는지."""
+    return bool(_DEADLINE_MARK.search(gap) or _DEADLINE_TAIL.match(tail))
+
+
 def _first_date(flat: str, pattern: str, reference: date) -> ScheduleHit | None:
     for match in re.finditer(pattern + _GAP + _DATE, flat):
         year_text, month, day = match.group(1), int(match.group(2)), int(match.group(3))
         try:
             resolved = date(_resolve_year(year_text, month, reference), month, day)
         except ValueError:
+            continue
+        # 기한이면 이 날짜는 버리고 다음 후보를 본다. 여기서 멈추면 뒤에 있는
+        # 진짜 일정까지 놓친다.
+        date_start = match.start(1) if match.group(1) else match.start(2)
+        if _is_deadline(flat[match.start():date_start], flat[match.end():match.end() + 12]):
             continue
         evidence = flat[max(0, match.start() - 12):match.end() + 12]
         return ScheduleHit(resolved, evidence)
@@ -139,9 +158,11 @@ def _classify(text: str) -> str | None:
 
 
 def _cell_date(cell: str, reference: date) -> date | None:
-    for match in re.finditer(_DATE, _squeeze(cell)):
+    squeezed = _squeeze(cell)
+    for match in re.finditer(_DATE, squeezed):
         day = _to_date(match, reference)
-        if day:
+        # 표 안에도 "8.31.(월) 11:00까지"처럼 제출 기한이 섞여 있다.
+        if day and not _is_deadline("", squeezed[match.end():match.end() + 12]):
             return day
     return None
 
@@ -355,3 +376,27 @@ def stages_in_process(process_text: str) -> set[str]:
     if "면접" in flat:
         stages.add("면접일정")
     return stages
+
+
+def readable_evidence(text: str, hit: ScheduleHit) -> str | None:
+    """정규화하기 전 원문에서 근거 문장을 찾아 읽을 수 있는 형태로 돌려준다.
+
+    추출에 쓰는 근거는 공백을 모두 지운 판이라 사람이 읽을 수 없다
+    ("...합격자발표:’26.9.11.(금)"). 원문에는 공백이 살아 있으므로 같은 날짜가
+    나오는 자리를 찾아 그 앞뒤를 잘라 준다. 같은 날짜가 여러 번 나올 수 있어,
+    근거에 들어 있던 한글 덩어리가 같이 보이는 자리만 인정한다. 못 찾으면 None을
+    돌려주고, 부르는 쪽은 근거 없이 넘어간다(엉뚱한 문장을 보여주는 것보다 낫다).
+    """
+    anchors = sorted(re.findall(r"[가-힣]{3,}", hit.evidence), key=len, reverse=True)
+    spaced = re.compile(rf"{hit.day.month}\s*[.\-월]\s*{hit.day.day}\s*[.\-일]?")
+    for match in spaced.finditer(text):
+        window = text[max(0, match.start() - 60):match.end() + 20]
+        flat = re.sub(r"\s+", "", window)
+        if not any(anchor in flat for anchor in anchors[:3]):
+            continue
+        # 문장 한가운데서 시작하면 읽기 나쁘다. 날짜 앞의 마지막 항목 기호부터 보여준다.
+        marks = [m.end() for m in re.finditer(r"[•○◦▪▸※]\s*", window[:60])]
+        if marks:
+            window = window[marks[-1]:]
+        return re.sub(r"\s+", " ", window).strip(" ·-–—")
+    return None
