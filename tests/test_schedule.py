@@ -166,3 +166,32 @@ def test_a_table_hit_without_hangul_is_located_by_its_weekday():
     original = "접수 9.5 이후 안내 ○ 필기시험 9.5(토) 시행 장소는 추후 공지"
     hit = ScheduleHit(date(2026, 9, 5), "9.5(토토)")
     assert "필기시험 9.5(토)" in readable_evidence(original, hit)
+
+
+def test_a_section_number_is_not_read_as_a_date():
+    """한국철도공사는 항목을 "2-2."로 매긴다. 이것을 2월 2일로 읽고 멈추는 바람에
+    진짜 필기일(9.12)을 통째로 놓쳤다. 접수일 이전 값은 건너뛰고 계속 찾는다."""
+    body = "필기시험 장소 안내2-2. 증빙서류 제출 3-1. 필기시험 (2배수 이내 선발)’26.9.12.(토)"
+    assert resolve(body, [], date(2026, 8, 7))["필기일정"].day == date(2026, 9, 12)
+
+
+def test_a_bracket_between_the_label_and_the_date_is_stepped_over():
+    """"필기시험 (2배수 이내 선발) 9.12."처럼 괄호 안에 숫자가 들어가는 공고가 있다."""
+    body = "3-1. 필기시험 (2배수 이내 선발)’26.9.12.(토) 전국 고사장 시행"
+    assert resolve(body, [], date(2026, 8, 7))["필기일정"].day == date(2026, 9, 12)
+
+
+def test_an_announcement_of_a_schedule_is_not_the_schedule():
+    """대한체육회의 "면접전형 일정 발표 9.14."는 면접일이 아니다. 실제 1차면접은 9.16."""
+    body = ("증빙자료 검토결과 및 면접전형 일정 발표2026. 9. 14.(월) "
+            "[전체 채용분야] 1차면접* 장소: 서울2026. 9. 16.(수) ~ 9. 18.(금)")
+    assert resolve(body, [], date(2026, 8, 5))["면접일정"].day == date(2026, 9, 16)
+
+
+def test_the_label_next_to_the_date_wins_over_an_earlier_one():
+    """"필기전형 안내 ➌ 필기전형 9.5."에서 날짜에 붙은 쪽이 진짜 라벨이다.
+
+    앞엣것부터 재면 사이에 낀 "안내" 때문에 멀쩡한 날짜를 버린다.
+    """
+    body = "필기전형 안내 ➌ 필기전형 ’26.9.5.(토) 시행"
+    assert resolve(body, [], date(2026, 8, 1))["필기일정"].day == date(2026, 9, 5)

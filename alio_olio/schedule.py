@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 # 노션 "ALIO 채용공고"의 날짜 속성명 → "관심 전형 일정"의 유형 옵션명.
 # 선언 순서가 곧 전형 진행 순서이며, 노션에 쓰는 순서도 이를 따른다.
@@ -36,14 +36,24 @@ _LABELS: dict[str, list[str]] = {
                 rf"서류전형합격발표{_NOT_WHEN}"],
     "필기일정": [r"필기시험(?!합격|응시대상)", r"필기전형(?!합격)", r"필기고사", r"필기평가"],
     "필기발표일": [rf"필기(?:시험|전형)?합격자?발표{_NOT_WHEN}", rf"필기(?:시험|전형)결과발표{_NOT_WHEN}"],
-    "면접일정": [r"면접시험(?!합격)", r"면접전형(?!합격)", r"면접심사(?!합격)"],
+    # 단계를 "1차면접", "2차(최종)면접"이라 부르는 공고가 있다(대한체육회). 앞의
+    # 이름들이 모두 빗나갔을 때만 쓰도록 뒤에 둔다.
+    "면접일정": [r"면접시험(?!합격)", r"면접전형(?!합격)", r"면접심사(?!합격)",
+                r"1차\s*\(?[^)]{0,6}\)?\s*면접(?!합격|대상)"],
     "최종발표일": [rf"최종합격자?(?:결정및)?발표{_NOT_WHEN}"],
 }
 
 # 라벨과 날짜 사이에 끼는 잡음("’26.", 괄호, 표 구분자)을 허용하는 폭.
 # 넓히면 엉뚱한 표의 날짜를 물어오므로 의도적으로 짧게 유지한다.
-_GAP = r"[^0-9]{0,14}"
+# 다만 라벨 바로 뒤 괄호 안에 숫자가 들어가는 공고가 있어("필기시험 (2배수 이내
+# 선발) ’26.9.12.(토)") 괄호 하나는 통째로 건너뛴다. 숫자를 그냥 허용하면 엉뚱한
+# 수치를 날짜로 읽으므로 괄호로 닫힌 구간에만 예외를 준다.
+_GAP = r"(?:[^0-9(]{0,6}\([^)]{0,20}\))?[^0-9]{0,14}"
 _DATE = r"(?:['’]?(\d{2,4})[.\-년])?(\d{1,2})[.\-월](\d{1,2})\.?(?:일)?(?:\([월화수목금토일]\))?"
+
+# 접수 시작일로부터 이 기간 안에 있어야 전형 일정으로 인정한다. 이보다 이르거나
+# 늦은 값은 날짜가 아니라 항목 번호이거나 다른 이야기다.
+_HORIZON_DAYS = 400
 
 # 굵은 글씨를 두 번 렌더링하는 PDF가 있다("1차전형1차전형시행시행").
 # 숫자까지 포함해 접으면 "’26.9.9."가 "’26.9."로 무너지므로 한글 덩어리만 대상으로 한다.
@@ -77,8 +87,10 @@ def extract_schedule(text: str, reference: date) -> dict[str, ScheduleHit]:
     flat = normalize(text)
     found: dict[str, ScheduleHit] = {}
     for field, patterns in _LABELS.items():
+        # 시행일(필기·면접)은 "일정 발표" 같은 안내 문구에 붙은 날짜를 받으면 안 된다.
+        schedule_only = field in ("필기일정", "면접일정")
         for pattern in patterns:
-            hit = _first_date(flat, pattern, reference)
+            hit = _first_date(flat, pattern, reference, schedule_only)
             if hit:
                 found[field] = hit
                 break
@@ -92,7 +104,7 @@ def extract_schedule(text: str, reference: date) -> dict[str, ScheduleHit]:
 #   "원활한 필기시험 진행을 위해 8.10.~8.11. 이틀간 응시여부 확인" → 응시 확인 기간
 # "위해"처럼 목적을 잇는 말이 끼면 그 날짜는 그 전형의 날이 아니라 그 전형을 준비하려고
 # 잡아 둔 다른 기간이다.
-_DEADLINE_MARK = re.compile(r"시\s*[∼~-]|까지|이후|부터|전까지|익일|마감|위해|위하여")
+_DEADLINE_MARK = re.compile(r"시\s*[∼~-]|까지|이후|부터|전까지|익일|마감|기한|위해|위하여")
 # 날짜 바로 뒤에 붙는 기한 표지. "(월)11:00까지"처럼 시각이 끼어들 수 있다.
 _DEADLINE_TAIL = re.compile(r"^[\d:시분\s]{0,10}까지")
 
@@ -102,17 +114,38 @@ def _is_deadline(gap: str, tail: str) -> bool:
     return bool(_DEADLINE_MARK.search(gap) or _DEADLINE_TAIL.match(tail))
 
 
-def _first_date(flat: str, pattern: str, reference: date) -> ScheduleHit | None:
+# 시행일을 찾을 때, 라벨과 날짜 사이에 이런 말이 끼면 그 날짜는 시험을 보는 날이
+# 아니라 그 일정을 알려 주는 날이다. 대한체육회의 "면접전형 일정 발표 9.14."를
+# 면접일로 읽었지만 실제 1차면접은 9.16.이었다.
+_ANNOUNCE_GAP = re.compile(r"발표|안내|공지")
+
+
+def _first_date(flat: str, pattern: str, reference: date,
+                schedule_only: bool = False) -> ScheduleHit | None:
     for match in re.finditer(pattern + _GAP + _DATE, flat):
         year_text, month, day = match.group(1), int(match.group(2)), int(match.group(3))
         try:
             resolved = date(_resolve_year(year_text, month, reference), month, day)
         except ValueError:
             continue
+        # 접수 전이거나 한참 뒤인 값은 날짜가 아니라 항목 번호일 때가 많다. 한국철도
+        # 공사의 "2-2."를 2월 2일로 읽고 거기서 멈추는 바람에 진짜 필기일(9.12)을
+        # 통째로 놓쳤다. 끝에서 걸러 봐야 이미 늦으므로 훑는 중에 건너뛴다.
+        if not (reference <= resolved <= reference + timedelta(days=_HORIZON_DAYS)):
+            continue
         # 기한이면 이 날짜는 버리고 다음 후보를 본다. 여기서 멈추면 뒤에 있는
         # 진짜 일정까지 놓친다.
         date_start = match.start(1) if match.group(1) else match.start(2)
-        if _is_deadline(flat[match.start():date_start], flat[match.end():match.end() + 12]):
+        # 라벨과 날짜 사이만 본다. 사이에 같은 라벨이 또 나오면("필기전형 안내 ➌
+        # 필기전형 9.5.") 날짜에 붙은 쪽이 진짜이므로 그 뒤만 남긴다.
+        label = re.match(pattern, flat[match.start():])
+        gap = flat[match.start() + (label.end() if label else 0):date_start]
+        repeated = list(re.finditer(pattern, gap))
+        if repeated:
+            gap = gap[repeated[-1].end():]
+        if _is_deadline(gap, flat[match.end():match.end() + 12]):
+            continue
+        if schedule_only and _ANNOUNCE_GAP.search(gap):
             continue
         evidence = flat[max(0, match.start() - 12):match.end() + 12]
         return ScheduleHit(resolved, evidence)
@@ -150,7 +183,6 @@ _CELL_STAGE_DATE = re.compile(r"(?P<label>[가-힣]{2,10})\s*[:：]?\s*(?P<date>
 
 # 표에 없는 값을 채운 뒤, 서로 앞뒤가 맞는지 확인할 순서
 _CHRONOLOGY = list(STAGES)
-_HORIZON_DAYS = 400
 
 
 def _classify(text: str) -> str | None:
@@ -393,18 +425,24 @@ def readable_evidence(text: str, hit: ScheduleHit) -> str | None:
     돌려주고, 부르는 쪽은 근거 없이 넘어간다(엉뚱한 문장을 보여주는 것보다 낫다).
     """
     anchors = sorted(re.findall(r"[가-힣]{3,}", hit.evidence), key=len, reverse=True)
-    spaced = re.compile(rf"{hit.day.month}\s*[.\-월]\s*{hit.day.day}\s*[.\-일]?")
-    # 표에서 온 근거는 "9.5(토토)"처럼 한글 덩어리가 없다. 대신 요일이 붙어 있으면
-    # 그것으로 자리를 좁힌다 — 같은 날짜가 여러 번 나와도 요일까지 같은 자리는 드물다.
-    weekday = re.search(r"\(\s*([월화수목금토일])", hit.evidence)
-    if not anchors and weekday:
-        spaced = re.compile(spaced.pattern + rf"\s*\(\s*{weekday.group(1)}")
-    # 표에서 뽑은 근거는 "9.5(토토)"처럼 한글 덩어리가 없어 대조할 말이 없다.
-    # 그런 경우엔 그 날짜가 문서에 딱 한 번 나올 때만 인정한다. 여러 번 나오면
-    # 어느 자리가 근거인지 알 수 없으므로 아무것도 보여주지 않는다.
-    occurrences = spaced.findall(text) if not anchors else []
-    if not anchors and len(occurrences) != 1:
-        return None
+    # 원문은 "9.5"로도 "2026.08.18."로도 쓴다. 0을 붙인 표기도 찾아야 한다.
+    base = rf"0?{hit.day.month}\s*[.\-월]\s*0?{hit.day.day}\s*[.\-일]?"
+    spaced = re.compile(base)
+    if not anchors:
+        # 표에서 온 근거는 "9.5(토토)"처럼 한글 덩어리가 없어 대조할 말이 없다.
+        # 요일이 붙어 있으면 그것으로 자리를 좁힌다. 요일을 날짜 뒤에 두는 공고도
+        # 앞에 두는 공고도 있다("9.5(토)", "화2026.08.18.( )").
+        weekday = re.search(r"\(\s*([월화수목금토일])|([월화수목금토일])\s*\d", hit.evidence)
+        letter = (weekday.group(1) or weekday.group(2)) if weekday else None
+        for candidate in ([re.compile(base + rf"\s*\(\s*{letter}"),
+                           re.compile(rf"{letter}\s*" + base)] if letter else []) + [spaced]:
+            if len(candidate.findall(text)) == 1:
+                spaced = candidate
+                break
+        else:
+            # 어느 자리가 근거인지 좁히지 못했다. 여러 자리 중 하나를 찍어 보여주면
+            # 근거가 아니라 착각을 만든다.
+            return None
     for match in spaced.finditer(text):
         window = text[max(0, match.start() - 60):match.end() + 20]
         # 원문이 두 번 찍는 문서라면("합합격격자자발발표표", "최종최종") 대조도 표시도
