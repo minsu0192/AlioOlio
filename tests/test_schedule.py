@@ -135,3 +135,14 @@ def test_readable_evidence_is_taken_from_the_spaced_original():
 
 def test_no_evidence_rather_than_the_wrong_sentence():
     assert readable_evidence("아무 상관 없는 문장", ScheduleHit(date(2026, 9, 5), "필기시험9.5")) is None
+
+
+def test_a_window_set_up_for_a_stage_is_not_the_stage_date():
+    """"원활한 필기시험 진행을 위해 8.10~8.11 응시여부 확인"은 시험일이 아니다.
+
+    전남대학교병원 공고문에서 실제로 8/10을 필기일로 읽었다. 진짜 시험일은 뒤에
+    "1차 필기시험 ’26.8.23.(일)"로 따로 있다.
+    """
+    body = ("원활한 필기시험 진행을 위해 ’26.8.10.(월)~’26.8.11.(화) 이틀간 응시여부를 확인하며 "
+            "1차 필기시험 ’26.8.23.(일) 시험 실시")
+    assert resolve(body, [], date(2026, 7, 24))["필기일정"].day == date(2026, 8, 23)
