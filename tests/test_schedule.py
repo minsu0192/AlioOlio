@@ -146,3 +146,23 @@ def test_a_window_set_up_for_a_stage_is_not_the_stage_date():
     body = ("원활한 필기시험 진행을 위해 ’26.8.10.(월)~’26.8.11.(화) 이틀간 응시여부를 확인하며 "
             "1차 필기시험 ’26.8.23.(일) 시험 실시")
     assert resolve(body, [], date(2026, 7, 24))["필기일정"].day == date(2026, 8, 23)
+
+
+def test_evidence_survives_a_document_that_prints_everything_twice():
+    """한수원 공고문은 표는 글자마다, 본문은 낱말째로 겹쳐 찍힌다.
+
+    원문 그대로는 "최종최종합격자발표합격자발표"라 대조도 표시도 안 된다. 펴서
+    비교하고 펴서 보여준다. 자를 자리도 편 뒤에 다시 찾아야 날짜가 안 잘린다.
+    """
+    original = "○구체적인장소는추후공지최종최종합격자발표합격자발표화12.22.(화)○채용홈페이지"
+    hit = ScheduleHit(date(2026, 12, 22), "지최종합격자발표화12.22.(화)○채용")
+    snippet = readable_evidence(original, hit)
+    assert "최종최종" not in snippet
+    assert "12.22.(화)" in snippet
+
+
+def test_a_table_hit_without_hangul_is_located_by_its_weekday():
+    """표에서 온 근거는 "9.5(토토)"뿐이라 대조할 말이 없다. 요일로 자리를 좁힌다."""
+    original = "접수 9.5 이후 안내 ○ 필기시험 9.5(토) 시행 장소는 추후 공지"
+    hit = ScheduleHit(date(2026, 9, 5), "9.5(토토)")
+    assert "필기시험 9.5(토)" in readable_evidence(original, hit)

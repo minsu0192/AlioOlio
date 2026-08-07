@@ -173,6 +173,8 @@ def _cell_date(cell: str, reference: date) -> date | None:
 # 굵은 글씨를 글자 단위로 두 번 찍는 PDF가 있다("필필기기시시험험"). 셀 대부분이 그런
 # 경우에만 접는다 — 한국어에도 "간간이"처럼 정상적인 겹글자가 있기 때문이다.
 _CHAR_DOUBLED = re.compile(r"([가-힣])\1")
+# 근거를 보여줄 때만 쓰는 넓은 겹침 패턴. "최종최종"처럼 두 글자짜리도 편다.
+_DISPLAY_DOUBLED = re.compile(r"([가-힣]{2,12})\1")
 
 
 def _squeeze(cell: str) -> str:
@@ -392,14 +394,49 @@ def readable_evidence(text: str, hit: ScheduleHit) -> str | None:
     """
     anchors = sorted(re.findall(r"[가-힣]{3,}", hit.evidence), key=len, reverse=True)
     spaced = re.compile(rf"{hit.day.month}\s*[.\-월]\s*{hit.day.day}\s*[.\-일]?")
+    # 표에서 온 근거는 "9.5(토토)"처럼 한글 덩어리가 없다. 대신 요일이 붙어 있으면
+    # 그것으로 자리를 좁힌다 — 같은 날짜가 여러 번 나와도 요일까지 같은 자리는 드물다.
+    weekday = re.search(r"\(\s*([월화수목금토일])", hit.evidence)
+    if not anchors and weekday:
+        spaced = re.compile(spaced.pattern + rf"\s*\(\s*{weekday.group(1)}")
+    # 표에서 뽑은 근거는 "9.5(토토)"처럼 한글 덩어리가 없어 대조할 말이 없다.
+    # 그런 경우엔 그 날짜가 문서에 딱 한 번 나올 때만 인정한다. 여러 번 나오면
+    # 어느 자리가 근거인지 알 수 없으므로 아무것도 보여주지 않는다.
+    occurrences = spaced.findall(text) if not anchors else []
+    if not anchors and len(occurrences) != 1:
+        return None
     for match in spaced.finditer(text):
         window = text[max(0, match.start() - 60):match.end() + 20]
-        flat = re.sub(r"\s+", "", window)
-        if not any(anchor in flat for anchor in anchors[:3]):
+        # 원문이 두 번 찍는 문서라면("합합격격자자발발표표", "최종최종") 대조도 표시도
+        # 편 뒤에 한다. 대조할 때만 공백을 지운다.
+        flat = re.sub(r"\s+", "", _undouble(window))
+        if anchors and not any(anchor in flat for anchor in anchors[:3]):
             continue
+        window = _undouble(window)
         # 문장 한가운데서 시작하면 읽기 나쁘다. 날짜 앞의 마지막 항목 기호부터 보여준다.
-        marks = [m.end() for m in re.finditer(r"[•○◦▪▸※]\s*", window[:60])]
-        if marks:
-            window = window[marks[-1]:]
+        # 겹침을 펴면 글자 수가 줄므로 자를 자리는 편 뒤에 다시 찾는다. 예전에는
+        # 원래 위치를 그대로 써서 날짜까지 잘라 버렸다.
+        inside = spaced.search(window)
+        if inside:
+            marks = [m.end() for m in re.finditer(r"[•○◦▪▸※]\s*", window[:inside.start()])]
+            if marks:
+                window = window[marks[-1]:]
         return re.sub(r"\s+", " ", window).strip(" ·-–—")
     return None
+
+
+def _undouble(text: str) -> str:
+    """두 번 찍힌 구간을 편다. 공백은 그대로 둔다.
+
+    한수원 공고문은 두 가지가 섞여 있다. 표 안은 글자마다("필필기기시시험험"),
+    본문은 낱말째로("최종최종합격자발표합격자발표") 겹친다. 한국어에도 "간간이"
+    같은 정상 겹글자가 있으므로 대부분이 겹칠 때만 편다.
+    """
+    # 본문 겹침은 "최종최종"처럼 두 글자짜리도 있어 추출용(_DOUBLED, 세 글자 이상)
+    # 보다 넓게 잡되, 두 군데 이상 겹칠 때만 편다.
+    if len(_DISPLAY_DOUBLED.findall(text)) >= 2:
+        text = _DISPLAY_DOUBLED.sub(lambda m: m.group(1), text)
+    hangul = sum(1 for char in text if "가" <= char <= "힣")
+    if hangul >= 6 and len(_CHAR_DOUBLED.findall(text)) * 2 > hangul * 0.6:
+        text = _CHAR_DOUBLED.sub(lambda m: m.group(1), text)
+    return text

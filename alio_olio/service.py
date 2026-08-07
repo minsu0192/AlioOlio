@@ -20,7 +20,7 @@ from .telegram import TelegramClient
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 11
+EXTRACTION_VERSION = 12
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
