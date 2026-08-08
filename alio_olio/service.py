@@ -13,7 +13,7 @@ from .deadlines import extract_deadlines
 from .filters import matches
 from .job_description import extract_profile
 from .notion import NotionClient, _is_empty as _is_blank
-from .questions import extract_questions, extract_topics, format_questions, pick_form
+from .questions import extract_areas, extract_questions, format_questions, pick_form
 from .schedule import STAGES, pick_schedule_table, readable_evidence, resolve, stages_in_process
 from .storage import Storage
 from .telegram import TelegramClient
@@ -21,7 +21,7 @@ from .telegram import TelegramClient
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 15
+EXTRACTION_VERSION = 16
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -206,7 +206,7 @@ class SyncService:
             job_description_url=extraction["job_description_url"],
             profile=extraction.get("profile", {}),
             questions=extraction.get("questions", ""),
-            memo=self._memo_for(page, dates, extraction["memo"]),
+            memo=self._memo_for(page, dates, extraction["memo"], extraction.get("areas", [])),
         )
         log.info("공고 %s: 날짜 %d개 추출, 노션 %d개 기록", posting.seq, len(dates), len(written))
 
@@ -249,11 +249,12 @@ class SyncService:
             "version": EXTRACTION_VERSION,
             "stages": {field: {"date": hit.day.isoformat(), "evidence": hit.evidence}
                        for field, hit in hits.items()},
+            "areas": extract_areas(text) if text else [],
             "deadlines": [{"label": d.label, "day": d.day.isoformat(),
                            "start": d.start.isoformat() if d.start else None} for d in due],
             "job_description_url": self._first_url(attachments["job_description"]),
             "profile": self._profile(attachments),
-            "questions": self._questions(attachments, text),
+            "questions": self._questions(attachments),
             "memo": self._memo(posting, notice, text, tables, hits, attachments),
         }
         self.storage.set_extraction(posting.seq, file_no, result)
@@ -291,7 +292,8 @@ class SyncService:
         first = next(iter(attachments), None)
         return first.url(self.settings.alio_base_url) if first else ""
 
-    def _memo_for(self, page: dict, dates: dict[str, str], memo: str) -> str:
+    def _memo_for(self, page: dict, dates: dict[str, str], memo: str,
+                  areas: list[str] | None = None) -> str:
         """공고문에서 읽은 메모에, 지금 노션에서 비어 있는 단계를 덧붙인다.
 
         비었는지는 노션 현재 상태를 봐야 안다. 추출 결과만 보고 적으면 손으로 채워
@@ -300,9 +302,15 @@ class SyncService:
         properties = page.get("properties", {})
         empty = [field for field in STAGES
                  if field not in dates and _is_blank(properties.get(field))]
-        if not empty:
-            return memo
-        return "\n".join(["직접 채워야 하는 단계: " + ", ".join(empty), memo]).strip()
+        lines = []
+        if empty:
+            lines.append("직접 채워야 하는 단계: " + ", ".join(empty))
+        if areas:
+            # 문항이 아니라 "자기소개서로 무엇을 보는지"다. 문항 칸에 넣으면 문항인 줄
+            # 알고 그대로 쓰게 되므로 여기에만, 무엇인지 밝혀서 적는다.
+            lines.append("자기소개서 평가 영역(공고문 기준, 문항 아님): " + ", ".join(areas)
+                         + " — 실제 문항은 입사지원 사이트에서 확인")
+        return "\n".join(lines + [memo]).strip()
 
     def _memo(self, posting: Posting, notice, text: str | None, tables: list,
               hits: dict, attachments: dict) -> str:

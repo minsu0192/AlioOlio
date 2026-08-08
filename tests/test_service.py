@@ -233,3 +233,21 @@ def test_deadlines_further_out_and_already_past_are_left_alone(tmp_path, monkeyp
     assert far.pending_submissions() == []
     over = _reminder_service(tmp_path, monkeypatch, date.today() - timedelta(days=1))
     assert over.pending_submissions() == []
+
+
+def test_evaluation_areas_never_land_in_the_questions_field(tmp_path, monkeypatch):
+    """공고문의 평가 영역을 문항 칸에 넣으면 문항인 줄 알고 그대로 쓰게 된다.
+
+    근로복지공단에서 실제로 그랬다. 양식이 없으면 문항 칸은 비워 두고, 평가 영역은
+    무엇인지 밝혀 전형 메모에만 적는다.
+    """
+    service, alio, notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    alio.notice_text = ("서류전형 평가기준 자기소개서(적/부) - 조직이해/지원동기, 직무이해/자기개발, "
+                        "직업윤리 (각 문항별 500자 이내 작성)")
+    alio.attachments = lambda seq: {"notice": [alio.notice], "application": [],
+                                    "etc": [], "job_description": []}
+    service.sync()
+    assert notion.questions[-1] == ""
+    memo = notion.detail_updates[-1][3]
+    assert "평가 영역" in memo and "문항 아님" in memo
+    assert "조직이해/지원동기" in memo

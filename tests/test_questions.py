@@ -1,5 +1,5 @@
 from alio_olio.attachments import Attachment
-from alio_olio.questions import (extract_questions, extract_topics, format_questions,
+from alio_olio.questions import (extract_areas, extract_questions, format_questions,
                                  merge_continuations,
                                  normalize_cell, pick_form)
 
@@ -195,12 +195,17 @@ def test_a_question_split_by_a_line_break_is_put_back_together():
     ]
 
 
-def test_topics_listed_in_the_notice_count_as_questions():
-    """근로복지공단은 지원서 양식을 안 올리고 공고문에 주제만 늘어놓는다."""
+def test_evaluation_areas_are_read_but_are_not_questions():
+    """근로복지공단 공고문의 "서류전형 평가기준"에 적힌 값이다.
+
+    자기소개서로 무엇을 보는지이지 물어보는 문장이 아니다. 실제 문항은 입사지원
+    사이트에 있다. 한때 이 값을 문항 칸에 넣었다가, 비워 두어야 할 자리에 옆에
+    있던 다른 정보를 채운 것이라 되돌렸다.
+    """
     body = ("4. 서류전형 평가기준 자기소개서(적/부) □ NCS직업기초능력을 반영한 자기소개서 적ㆍ부 평가 "
             "- 조직이해/지원동기, 직무이해/자기개발, 의사소통능력/대인관계능력, "
             "문제해결능력/자원관리능력, 직업윤리 (각 문항별 500자 이내 작성)")
-    assert extract_topics(body) == [
+    assert extract_areas(body) == [
         "조직이해/지원동기 (500자 이내)",
         "직무이해/자기개발 (500자 이내)",
         "의사소통능력/대인관계능력 (500자 이내)",
@@ -209,6 +214,6 @@ def test_topics_listed_in_the_notice_count_as_questions():
     ]
 
 
-def test_a_list_with_a_length_limit_is_not_a_question_without_the_cover_letter_context():
+def test_a_list_with_a_length_limit_is_ignored_without_the_cover_letter_context():
     """자기소개서 이야기가 없으면 그냥 평가 항목 나열이다."""
-    assert extract_topics("평가항목: 교육사항, 자격사항, 경력사항 (각 문항별 500자 이내 작성)") == []
+    assert extract_areas("평가항목: 교육사항, 자격사항, 경력사항 (각 문항별 500자 이내 작성)") == []
