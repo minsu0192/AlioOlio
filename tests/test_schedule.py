@@ -195,3 +195,14 @@ def test_the_label_next_to_the_date_wins_over_an_earlier_one():
     """
     body = "필기전형 안내 ➌ 필기전형 ’26.9.5.(토) 시행"
     assert resolve(body, [], date(2026, 8, 1))["필기일정"].day == date(2026, 9, 5)
+
+
+def test_the_application_opening_day_is_never_a_stage_date():
+    """단계 이름을 한 줄에, 날짜를 다른 줄에 적는 표가 있다(전남대학교병원).
+
+    라벨 뒤 첫 날짜가 접수 시작일이라 "최종 합격자발표 8.7."이 되어 버렸다.
+    실제 최종발표는 9.1.이다. 접수를 시작하는 날에 열리는 전형은 없다.
+    """
+    body = ("구 분 공고 및 원서접수 1차 서류심사 합격자발표 2차 면접전형 최종 합격자발표 "
+            "일 정 ’26. 8. 7.(금) ~ 8. 14.(금) ’26. 8. 20.(목) ’26. 9. 1.(화)")
+    assert "최종발표일" not in resolve(body, [], date(2026, 8, 7))

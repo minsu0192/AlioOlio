@@ -131,7 +131,10 @@ def _first_date(flat: str, pattern: str, reference: date,
         # 접수 전이거나 한참 뒤인 값은 날짜가 아니라 항목 번호일 때가 많다. 한국철도
         # 공사의 "2-2."를 2월 2일로 읽고 거기서 멈추는 바람에 진짜 필기일(9.12)을
         # 통째로 놓쳤다. 끝에서 걸러 봐야 이미 늦으므로 훑는 중에 건너뛴다.
-        if not (reference <= resolved <= reference + timedelta(days=_HORIZON_DAYS)):
+        # 접수를 시작하는 날에 열리는 전형은 없다. 전남대학교병원처럼 단계 이름을
+        # 한 줄에, 날짜를 다른 줄에 적는 표에서는 라벨 뒤 첫 날짜가 접수 시작일이라
+        # "최종 합격자발표 8.7."이 되어 버린다(실제로는 9.1.).
+        if not (reference < resolved <= reference + timedelta(days=_HORIZON_DAYS)):
             continue
         # 기한이면 이 날짜는 버리고 다음 후보를 본다. 여기서 멈추면 뒤에 있는
         # 진짜 일정까지 놓친다.
