@@ -313,6 +313,42 @@ class NotionClient:
             created += 1
         return created
 
+    def ensure_deadline_events(self, schedule_data_source_id: str, posting_page_id: str,
+                               organization: str, deadlines: list[dict]) -> int:
+        """제출·등록 기한을 캘린더에 올린다. 한 공고에 여럿일 수 있어 이름으로 구분한다.
+
+        시험을 보는 날이 아니라 지원자가 직접 해야 하는 일이라 유형을 "제출기한"으로
+        따로 둔다. 놓치면 그대로 탈락하는 날짜다.
+        """
+        existing = {self._title_of(page) for page in self.query(schedule_data_source_id, {
+            "filter": {"property": "공고", "relation": {"contains": posting_page_id}}
+        })}
+        created = 0
+        for item in deadlines:
+            title = f"{organization} {item['label']}"
+            if title in existing:
+                continue
+            span = {"start": item["day"]} if not item.get("start") else {
+                "start": item["start"], "end": item["day"]}
+            self.request("POST", "/pages", json={
+                "parent": {"type": "data_source_id", "data_source_id": schedule_data_source_id},
+                "properties": {
+                    "일정명": {"title": _text(title)},
+                    "유형": {"select": {"name": "제출기한"}},
+                    "확정상태": {"select": {"name": "예정"}},
+                    "기관": {"rich_text": _text(organization)},
+                    "공고": {"relation": [{"id": posting_page_id}]},
+                    "일정일": {"date": span},
+                },
+            })
+            created += 1
+        return created
+
+    @staticmethod
+    def _title_of(page: dict) -> str:
+        return "".join(part.get("plain_text", "")
+                       for part in page["properties"].get("일정명", {}).get("title", []))
+
     def _fill_undecided(self, page: dict, day: str | None) -> bool:
         properties = page.get("properties", {})
         status = (properties.get("확정상태", {}).get("select") or {}).get("name")

@@ -9,18 +9,19 @@ from .alio import AlioClient, process_section
 from .attachments import to_tables, to_text
 from .config import Settings
 from .domain import Posting
+from .deadlines import extract_deadlines
 from .filters import matches
 from .job_description import extract_profile
 from .notion import NotionClient, _is_empty as _is_blank
 from .questions import extract_questions, extract_topics, format_questions, pick_form
-from .schedule import STAGES, readable_evidence, resolve, stages_in_process
+from .schedule import STAGES, pick_schedule_table, readable_evidence, resolve, stages_in_process
 from .storage import Storage
 from .telegram import TelegramClient
 
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 14
+EXTRACTION_VERSION = 15
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -221,6 +222,8 @@ class SyncService:
             if field in extraction["stages"] or field in expected
         }
         events = self.notion.ensure_schedule_events(schedule_ds, page["id"], posting.organization, stages)
+        events += self.notion.ensure_deadline_events(
+            schedule_ds, page["id"], posting.organization, extraction.get("deadlines", []))
         return dates, events
 
     def _extraction(self, posting: Posting) -> dict:
@@ -239,10 +242,15 @@ class SyncService:
         text = to_text(notice, data) if notice else None
         tables = to_tables(notice, data) if notice else []
         hits = resolve(text, tables, posting.start_date)
+        # 전형일정표에는 시험 날짜만 있는 게 아니다. 자기소개서 제출, 증빙서류 등록처럼
+        # 놓치면 탈락하는 기한도 같은 표에 들어 있다.
+        due = extract_deadlines(pick_schedule_table(tables), posting.start_date)
         result = {
             "version": EXTRACTION_VERSION,
             "stages": {field: {"date": hit.day.isoformat(), "evidence": hit.evidence}
                        for field, hit in hits.items()},
+            "deadlines": [{"label": d.label, "day": d.day.isoformat(),
+                           "start": d.start.isoformat() if d.start else None} for d in due],
             "job_description_url": self._first_url(attachments["job_description"]),
             "profile": self._profile(attachments),
             "questions": self._questions(attachments, text),
