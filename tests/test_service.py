@@ -44,6 +44,7 @@ class FakeNotion:
         self.detail_updates = []
         self.questions = []
         self.profiles = []
+        self.periods = []
         self.events = []
         self.closed = set()
     def bootstrap(self, parent):
@@ -65,10 +66,11 @@ class FakeNotion:
         self.closed = set(expired_seqs)
         return len(self.closed)
     def update_posting_details(self, page_id, current, dates, job_description_url="",
-                               questions="", memo="", profile=None):
+                               questions="", memo="", profile=None, application_period=None):
         self.detail_updates.append((page_id, dates, job_description_url, memo))
         self.questions.append(questions)
         self.profiles.append(profile or {})
+        self.periods.append(application_period)
         return sorted(dates)
     def ensure_schedule_events(self, _ds, page_id, organization, stages):
         self.events.append((page_id, stages))

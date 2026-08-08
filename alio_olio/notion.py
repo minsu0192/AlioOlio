@@ -27,6 +27,9 @@ POSTING_PROPERTIES = {
     "공고명": {"title": {}},
     "기관": {"rich_text": {}},
     "지원기간": {"date": {}},
+    # ALIO의 지원기간이 공고기간일 때가 있다(근로복지공단: 공고 8.5.~, 접수 8.12.~).
+    # 공고문에 접수기간이 따로 적혀 있고 값이 다르면 여기에 넣는다.
+    "접수기간": {"date": {}},
     "캘린더 표시": {"checkbox": {}},
     "필터 일치": {"checkbox": {}},
     "상태": {"select": {"options": [{"name": "진행중", "color": "green"}, {"name": "마감", "color": "gray"}]}},
@@ -148,7 +151,7 @@ class NotionClient:
         ]}
         # 표에는 마감이 가까운 순으로 세운다. 정렬이 없으면 만들어진 순서대로 나와
         # 어느 공고가 급한지 보이지 않는다. 칸도 필요한 것만 편다(기본은 35개 전부).
-        listed = ["공고명", "기관", "구분", "관심", "지원기간", "상태", "서류발표일", "필기일정",
+        listed = ["공고명", "기관", "구분", "관심", "지원기간", "접수기간", "상태", "서류발표일", "필기일정",
                   "필기발표일", "면접일정", "최종발표일", "근무지", "근무분야", "학력", "채용인원",
                   "ALIO 링크"]
         views = [
@@ -250,7 +253,8 @@ class NotionClient:
 
     def update_posting_details(self, page_id: str, current: dict, dates: dict[str, str],
                                job_description_url: str = "", questions: str = "",
-                               memo: str = "", profile: dict[str, str] | None = None) -> list[str]:
+                               memo: str = "", profile: dict[str, str] | None = None,
+                               application_period: list[str] | None = None) -> list[str]:
         """추출 결과를 페이지에 쓰되, 이미 값이 있는 속성은 건드리지 않는다.
 
         `current`는 조회로 받은 properties 원본이다. 사용자가 노션에서 직접 고친 날짜를
@@ -262,6 +266,12 @@ class NotionClient:
                 properties[name] = {"date": {"start": value}}
         if job_description_url and _is_empty(current.get("직무기술서 링크")):
             properties["직무기술서 링크"] = {"url": job_description_url}
+        # 접수기간은 ALIO 값이 틀렸을 때만 채운다. 사람이 고쳐 둔 값은 건드리지 않는다.
+        if application_period and _is_empty(current.get("접수기간")):
+            listed = (current.get("지원기간", {}) or {}).get("date") or {}
+            if listed.get("start") != application_period[0]:
+                properties["접수기간"] = {"date": {"start": application_period[0],
+                                                "end": application_period[1]}}
         if questions and _is_empty(current.get("자소서 문항")):
             properties["자소서 문항"] = {"rich_text": _text(questions)}
         # 직무기술서에서 뽑은 값. 직접 정리해 둔 내용을 덮지 않도록 빈 칸만 채운다.

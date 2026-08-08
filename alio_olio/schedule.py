@@ -481,3 +481,27 @@ def _undouble(text: str) -> str:
     if hangul >= 6 and len(_CHAR_DOUBLED.findall(text)) * 2 > hangul * 0.6:
         text = _CHAR_DOUBLED.sub(lambda m: m.group(1), text)
     return text
+
+
+# ALIO가 주는 지원기간은 공고기간일 때가 있다. 근로복지공단은 공고기간이 8.5.부터인데
+# 실제 접수는 8.12.에 열린다. 그대로 두면 지금 지원할 수 있는 것처럼 보인다.
+_APPLY_PERIOD = re.compile(
+    r"접\s*수\s*기\s*간\s*[:：]?\s*(?P<from>" + _DATE + r")\s*[~∼〜]\s*(?P<to>" + _DATE + r")")
+
+
+def application_period(text: str | None, reference: date) -> tuple[date, date] | None:
+    """공고문에 따로 적힌 접수기간을 읽는다. 없으면 None.
+
+    "공고기간: 8.5.~8.19. / 접수기간: 8.12.~8.19."처럼 둘을 나눠 적는 공고가 있다.
+    """
+    if not text:
+        return None
+    flat = normalize(text)
+    match = _APPLY_PERIOD.search(flat)
+    if not match:
+        return None
+    start = _to_date(re.match(_DATE, match.group("from")), reference)
+    end = _to_date(re.match(_DATE, match.group("to")), reference)
+    if not start or not end or not start <= end:
+        return None
+    return start, end

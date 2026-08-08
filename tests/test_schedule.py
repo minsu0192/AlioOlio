@@ -206,3 +206,21 @@ def test_the_application_opening_day_is_never_a_stage_date():
     body = ("구 분 공고 및 원서접수 1차 서류심사 합격자발표 2차 면접전형 최종 합격자발표 "
             "일 정 ’26. 8. 7.(금) ~ 8. 14.(금) ’26. 8. 20.(목) ’26. 9. 1.(화)")
     assert "최종발표일" not in resolve(body, [], date(2026, 8, 7))
+
+
+def test_the_notice_application_period_beats_the_alio_field():
+    """ALIO가 주는 지원기간이 공고기간일 때가 있다.
+
+    근로복지공단은 공고 8.5.부터인데 실제 접수는 8.12.에 열린다. 그대로 두면
+    지금 지원할 수 있는 것처럼 보인다.
+    """
+    from alio_olio.schedule import application_period
+    body = ("원서접수 • 공고기간: ’26. 8. 5.(수) ∼ ’26. 8. 19.(수)"
+            " • 접수기간: ’26. 8. 12.(수) ∼ ’26. 8. 19.(수) 18:00:00까지")
+    assert application_period(body, date(2026, 8, 5)) == (date(2026, 8, 12), date(2026, 8, 19))
+
+
+def test_no_separate_application_period_is_reported_as_none():
+    from alio_olio.schedule import application_period
+    assert application_period("지원서 접수 7.22.(수)∼8.6.(목) 15:00", date(2026, 7, 22)) is None
+    assert application_period(None, date(2026, 8, 5)) is None
