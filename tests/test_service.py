@@ -292,3 +292,22 @@ def test_a_weakly_supported_date_is_warned_once(tmp_path, monkeypatch):
     service.telegram.uncertain.clear()
     service.enrich_interests()
     assert service.telegram.uncertain == [], "같은 값을 다시 알렸습니다"
+
+
+def test_a_form_added_after_the_opening_day_is_picked_up(tmp_path, monkeypatch):
+    """지원서 양식은 공고가 뜬 뒤 추가되기도 한다.
+
+    캐시를 공고문 파일 하나로만 잡으면, 공고문이 그대로인 한 새로 올라온 양식을
+    영영 보지 못한다. 첨부 구성이 바뀌면 다시 읽어야 한다.
+    """
+    service, alio, _notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    base = {"notice": [alio.notice], "application": [], "etc": [], "job_description": []}
+    alio.attachments = lambda seq: base
+    service.sync()
+    assert alio.downloads == ["77"]
+
+    # 접수가 시작되며 자기소개서 양식이 붙었다. 공고문(77)은 그대로다.
+    base["etc"] = [Attachment("88", "자기소개서 양식.pdf")]
+    _age_extractions(service, service_module.EXTRACTION_COOLDOWN + timedelta(hours=1))
+    service.enrich_interests()
+    assert "88" in alio.downloads, "새로 올라온 양식을 읽지 않았습니다"

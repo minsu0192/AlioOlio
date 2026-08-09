@@ -22,7 +22,7 @@ from .telegram import TelegramClient
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 19
+EXTRACTION_VERSION = 20
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -33,6 +33,17 @@ SUBMITTED = "완료"
 
 # ALIO 공고 주소는 두 가지로 쓰인다. 웹은 ?seq=302968, 모바일 채용관은 ?idx=302968.
 _ALIO_SEQ = re.compile(r"alio\.go\.kr/.*[?&](?:seq|idx)=(\d+)")
+
+
+def attachment_key(attachments: dict) -> str:
+    """추출 결과를 다시 써도 되는지 판정할 열쇠. 첨부 전체가 그대로일 때만 재사용한다.
+
+    공고문 하나만 보면, 접수가 시작되면서 자기소개서 양식이 뒤늦게 올라와도
+    공고문이 그대로라 영영 다시 보지 않는다. 실제로 지원서 양식은 공고가 뜬 뒤
+    추가되는 일이 있다.
+    """
+    numbers = sorted(item.file_no for group in attachments.values() for item in group)
+    return ",".join(numbers) or "none"
 
 
 def alio_seq(url: str | None) -> int | None:
@@ -250,7 +261,7 @@ class SyncService:
             return fresh
         attachments = self.alio.attachments(posting.seq)
         notice = next(iter(attachments["notice"]), None)
-        file_no = notice.file_no if notice else "none"
+        file_no = attachment_key(attachments)
         cached = self.storage.extraction(posting.seq, EXTRACTION_VERSION, file_no=file_no)
         if cached is not None:
             return cached
