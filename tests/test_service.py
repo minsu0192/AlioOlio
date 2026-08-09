@@ -81,10 +81,13 @@ class FakeTelegram:
     def __init__(self):
         self.sent = []
         self.reminded = []
+        self.uncertain = []
     def send_posting(self, posting):
         self.sent.append(posting.seq)
     def send_reminder(self, posting, days_left):
         self.reminded.append((posting.seq, days_left))
+    def send_uncertain(self, posting, items):
+        self.uncertain.append((posting.seq, items))
 
 
 def test_baseline_then_catchup_notifies_once(tmp_path):
@@ -273,3 +276,19 @@ def test_the_notice_application_period_replaces_the_alio_one(tmp_path, monkeypat
     service.sync()
     fresh = service.storage.posting(1)
     assert fresh.start_date == date(2026, 8, 12)
+
+
+def test_a_weakly_supported_date_is_warned_once(tmp_path, monkeypatch):
+    """근거가 약한 값은 캘린더에 올리되 알린다. 같은 값을 두 번 알리지는 않는다."""
+    service, alio, notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    # 표가 없어 본문에서만, 그것도 절 위치로만 판단하는 형태
+    alio.notice_text = ("서류전형•선발방법: 자기소개서 평가 •합격자발표: ’26.9.11.(금) "
+                        "필기전형•일시: ’26.9.19.(토) •합격자발표: ’26.10.2.(금)")
+    service.sync()
+    assert service.telegram.uncertain, "근거가 약한 값을 알리지 않았습니다"
+    fields = {field for _p, items in service.telegram.uncertain for field, _d, _r in items}
+    assert "필기발표일" in fields
+
+    service.telegram.uncertain.clear()
+    service.enrich_interests()
+    assert service.telegram.uncertain == [], "같은 값을 다시 알렸습니다"

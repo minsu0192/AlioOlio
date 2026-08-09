@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
 # 노션 "ALIO 채용공고"의 날짜 속성명 → "관심 전형 일정"의 유형 옵션명.
@@ -65,6 +65,10 @@ _DOUBLED_THRESHOLD = 20
 class ScheduleHit:
     day: date
     evidence: str
+    # 어느 경로로 얻었는지. 표가 가장 믿을 만하고, 절 머리말 추론이 가장 약하다.
+    source: str = "표"
+    # 표와 본문이 서로 다른 날짜를 준 경우. 표를 쓰되 확인이 필요하다.
+    contested: str = ""
 
 
 def normalize(text: str) -> str:
@@ -387,18 +391,46 @@ def section_announcements(text: str, reference: date) -> dict[str, ScheduleHit]:
 
 
 def resolve(text: str | None, tables: list[list[list[str]]], reference: date) -> dict[str, ScheduleHit]:
-    """표를 먼저 읽고, 빠진 필드만 본문 정규식으로 보충한 뒤 앞뒤를 검사한다."""
+    """표를 먼저 읽고, 빠진 필드만 본문 정규식으로 보충한 뒤 앞뒤를 검사한다.
+
+    어느 경로로 얻었는지와, 다른 경로가 다른 날짜를 줬는지를 함께 남긴다. 이 값이
+    맞는지는 결국 사람이 봐야 하는데, 무엇을 봐야 하는지 좁혀 주기 위해서다.
+    """
     found: dict[str, ScheduleHit] = {}
     table = pick_schedule_table(tables)
     if table:
         found.update(parse_schedule_table(table, reference))
     if text:
-        for field, hit in extract_schedule(text, reference).items():
-            found.setdefault(field, hit)
+        from_text = extract_schedule(text, reference)
+        for field, hit in from_text.items():
+            found.setdefault(field, replace(hit, source="본문"))
         # 이름을 제대로 단 라벨을 다 쓰고도 남은 칸만 절 구조로 채운다.
         for field, hit in section_announcements(text, reference).items():
-            found.setdefault(field, hit)
+            found.setdefault(field, replace(hit, source="절 구조"))
+        # 표를 채택한 칸이라도 본문이 다른 날짜를 말하면 표시해 둔다.
+        for field, hit in from_text.items():
+            chosen = found.get(field)
+            if chosen and chosen.source == "표" and chosen.day != hit.day:
+                found[field] = replace(chosen, contested=hit.day.isoformat())
     return validate(found, reference)
+
+
+def needs_check(field: str, hit: ScheduleHit, snippet: str | None) -> str | None:
+    """이 값을 사람이 확인해야 하는 이유. 없으면 None.
+
+    틀린 값이 조용히 지나가는 것을 막는 장치다. 값이 틀리지 않게 만드는 것과는
+    다른 일이고, 규칙으로 다 막을 수 없다는 것이 이미 드러났기 때문에 둔다.
+    """
+    if hit.contested:
+        return f"표는 {hit.day}, 본문은 {hit.contested}"
+    if snippet is None:
+        return "공고문에서 근거 문장을 찾지 못함"
+    if hit.source == "절 구조":
+        return "전형 이름 없이 절 위치로만 판단"
+    # 근거 문장에 "까지", "위해" 같은 말이 섞였는지도 재 봤지만, 그런 값은 추출
+    # 단계에서 이미 버리므로 남은 것은 전부 정답이었다. 코퍼스 85칸 중 20칸이
+    # 헛되이 걸려 신호가 묻혔다. 구조적으로 불확실한 셋만 남긴다.
+    return None
 
 
 def stages_in_process(process_text: str) -> set[str]:

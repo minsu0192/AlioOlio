@@ -14,15 +14,15 @@ from .filters import matches
 from .job_description import extract_profile
 from .notion import NotionClient, _is_empty as _is_blank
 from .questions import extract_areas, extract_questions, format_questions, pick_form
-from .schedule import (STAGES, application_period, pick_schedule_table, readable_evidence,
-                       resolve, stages_in_process)
+from .schedule import (STAGES, application_period, needs_check, pick_schedule_table,
+                       readable_evidence, resolve, stages_in_process)
 from .storage import Storage
 from .telegram import TelegramClient
 
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 18
+EXTRACTION_VERSION = 19
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -237,6 +237,7 @@ class SyncService:
             for field in STAGES
             if field in extraction["stages"] or field in expected
         }
+        self._warn_uncertain(posting, extraction["stages"])
         events = self.notion.ensure_schedule_events(schedule_ds, page["id"], posting.organization, stages)
         events += self.notion.ensure_deadline_events(
             schedule_ds, page["id"], posting.organization, extraction.get("deadlines", []))
@@ -272,7 +273,8 @@ class SyncService:
                      posting.seq, posting.start_date, period[0])
         result = {
             "version": EXTRACTION_VERSION,
-            "stages": {field: {"date": hit.day.isoformat(), "evidence": hit.evidence}
+            "stages": {field: {"date": hit.day.isoformat(), "evidence": hit.evidence,
+                               "check": needs_check(field, hit, readable_evidence(text or "", hit))}
                        for field, hit in hits.items()},
             "areas": extract_areas(text) if text else [],
             "application_period": [d.isoformat() for d in period] if period else None,
@@ -318,6 +320,24 @@ class SyncService:
         first = next(iter(attachments), None)
         return first.url(self.settings.alio_base_url) if first else ""
 
+    def _warn_uncertain(self, posting: Posting, stages: dict) -> None:
+        """근거가 약한 값을 텔레그램으로 알린다. 같은 값은 한 번만 보낸다.
+
+        메모에 표시만 해 두면 페이지를 열어야 보인다. 이번에 잘못 읽은 날짜들은
+        모두 캘린더에 올라간 뒤에야 발견됐고, 그것도 내가 근거를 훑다 찾았다.
+        """
+        pending = [(field, value["date"], value["check"])
+                   for field, value in sorted(stages.items())
+                   if value.get("check")]
+        fresh = [item for item in pending
+                 if not self.storage.get_meta(f"warned:{posting.seq}:{item[0]}:{item[1]}")]
+        if not fresh:
+            return
+        self.telegram.send_uncertain(posting, fresh)
+        for field, day, _reason in fresh:
+            self.storage.set_meta(f"warned:{posting.seq}:{field}:{day}", "1")
+        log.info("공고 %s: 근거가 약한 일정 %d건 알림", posting.seq, len(fresh))
+
     def _memo_for(self, page: dict, dates: dict[str, str], memo: str,
                   areas: list[str] | None = None) -> str:
         """공고문에서 읽은 메모에, 지금 노션에서 비어 있는 단계를 덧붙인다.
@@ -358,7 +378,9 @@ class SyncService:
         if text:
             for field, hit in hits.items():
                 snippet = readable_evidence(text, hit)
-                lines.append(f"{field} {hit.day}" + (f"  ←  {snippet}" if snippet else ""))
+                reason = needs_check(field, hit, snippet)
+                mark = "  ⚠ 확인 필요: " + reason if reason else ""
+                lines.append(f"{field} {hit.day}" + (f"  ←  {snippet}" if snippet else "") + mark)
         # 무엇이 비었는지는 노션 현재 상태를 봐야 알 수 있으므로 여기서 적지 않는다.
         # 손으로 채워 넣은 날짜까지 "직접 채워야 한다"고 하면 거짓말이 된다.
         for label, key in (("공고문", "notice"), ("입사지원서", "application"), ("기타", "etc")):

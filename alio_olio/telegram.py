@@ -19,6 +19,14 @@ class TelegramClient:
         ]
         self._send("\n".join(lines))
 
+    def send_uncertain(self, posting: Posting, items: list[tuple[str, str, str]]) -> None:
+        """근거가 약한 전형 일정을 알린다. items = [(속성, 날짜, 이유)]"""
+        lines = [f"🔍 확인이 필요한 일정 — {posting.organization}"]
+        lines += [f"{field} {day}\n  · {reason}" for field, day, reason in items]
+        lines.append("공고문을 열어 확인해 주세요.")
+        lines.append(posting.url)
+        self._send("\n".join(lines))
+
     def send_posting(self, posting: Posting) -> None:
         lines = [
             "🔔 ALIO 새 채용공고", f"기관: {posting.organization}", f"제목: {posting.title}",
