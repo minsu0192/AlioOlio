@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -57,8 +58,15 @@ FILTER_PROPERTIES = {
 }
 
 
+# PDF에서 뽑은 글자에는 널 바이트 같은 제어문자가 섞여 있다. 노션은 저장할 때 이를
+# 버리므로, 그대로 보내면 보낸 값과 읽어온 값이 영원히 달라 매번 다시 쓰게 된다
+# (한수원 전형 메모가 하루 100번 넘게 다시 쓰이고 있었다).
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 def _text(value: str) -> list[dict]:
-    return [{"type": "text", "text": {"content": value[:2000]}}] if value else []
+    cleaned = _CONTROL.sub("", value or "")
+    return [{"type": "text", "text": {"content": cleaned[:2000]}}] if cleaned else []
 
 
 def _multi(values: list[str]) -> dict:

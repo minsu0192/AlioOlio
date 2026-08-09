@@ -235,10 +235,20 @@ class SyncService:
             memo=self._memo_for(page, dates, extraction["memo"], extraction.get("areas", [])),
             application_period=extraction.get("application_period"),
         )
-        log.info("공고 %s: 날짜 %d개 추출, 노션 %d개 기록", posting.seq, len(dates), len(written))
+        # 바뀐 게 없으면 조용히 지나간다. 하루 500줄 넘게 "0개 기록"만 쌓였다.
+        if written:
+            log.info("공고 %s: 날짜 %d개 추출, 노션 %s 기록", posting.seq, len(dates), written)
 
         schedule_ds = self.settings.notion_schedule_data_source_id
         if not schedule_ds:
+            return dates, 0
+        # 캘린더에 이미 같은 내용을 올려 두었으면 조회조차 하지 않는다. 필터 갱신이
+        # 15분마다 이 경로를 타는데, 그때마다 공고마다 두 번씩 물어보면 하루 천 번이
+        # 넘게 "바뀐 것 없음"만 확인하게 된다.
+        seeded = f"seeded:{posting.seq}"
+        signature = json.dumps([sorted(dates.items()), extraction.get("deadlines", [])],
+                               ensure_ascii=False, sort_keys=True)
+        if self.storage.get_meta(seeded) == signature:
             return dates, 0
         # 날짜를 못 뽑은 단계도 '미정'으로 남겨야 캘린더에서 직접 채워 넣을 수 있다.
         expected = stages_in_process(process_section(posting.detail_text))
@@ -255,6 +265,7 @@ class SyncService:
         events = self.notion.ensure_schedule_events(schedule_ds, page["id"], posting.organization, stages)
         events += self.notion.ensure_deadline_events(
             schedule_ds, page["id"], posting.organization, extraction.get("deadlines", []))
+        self.storage.set_meta(seeded, signature)
         return dates, events
 
     def _extraction(self, posting: Posting) -> dict:

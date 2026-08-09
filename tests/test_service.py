@@ -359,3 +359,22 @@ def test_newly_posted_questions_are_announced(tmp_path, monkeypatch):
     notion.interests = [filled]
     service.enrich_interests()
     assert service.telegram.questions_sent == []
+
+
+def test_the_calendar_is_not_queried_when_nothing_changed(tmp_path, monkeypatch):
+    """필터 갱신이 15분마다 이 경로를 탄다. 바뀐 게 없으면 물어보지도 않는다."""
+    service, alio, notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    service.sync()
+    seeded = len(notion.events)
+    assert seeded, "처음에는 캘린더에 올려야 한다"
+
+    service.enrich_interests()
+    assert len(notion.events) == seeded, "바뀐 것이 없는데 캘린더를 다시 건드렸습니다"
+
+
+def test_control_characters_do_not_cause_endless_rewrites():
+    """PDF에서 뽑은 글자에는 널 바이트가 섞인다. 노션은 저장할 때 버리므로 그대로
+    보내면 보낸 값과 읽은 값이 영원히 달라 매번 다시 쓰게 된다."""
+    from alio_olio.notion import _text
+    assert _text("가나\x00다\x01라")[0]["text"]["content"] == "가나다라"
+    assert _text("\x00") == []
