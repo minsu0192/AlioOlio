@@ -253,3 +253,23 @@ def test_evaluation_areas_never_land_in_the_questions_field(tmp_path, monkeypatc
     memo = notion.detail_updates[-1][3]
     assert "평가 영역" in memo and "문항 아님" in memo
     assert "조직이해/지원동기" in memo
+
+
+def test_the_notice_application_period_replaces_the_alio_one(tmp_path, monkeypatch):
+    """ALIO가 주는 지원기간이 공고기간일 때가 있다(근로복지공단: 공고 8.5.~, 접수 8.12.~).
+
+    지원자에게 필요한 것은 실제로 지원서를 낼 수 있는 기간이므로 그것으로 덮는다.
+    한 번 고친 뒤 다음 동기화가 ALIO 값으로 되돌리지 않아야 한다.
+    """
+    service, alio, notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    alio.notice_text = ("원서접수 • 공고기간: ’26. 8. 5.(수) ∼ ’26. 8. 19.(수)"
+                        " • 접수기간: ’26. 8. 12.(수) ∼ ’26. 8. 19.(수) 18:00:00까지")
+    alio.items = [Posting(1, "기관", "공고 1", date(2026, 8, 5), date(2026, 8, 19),
+                          date(2026, 8, 5), employment_types=["정규직"], url="https://alio/1")]
+    service.sync()
+    assert notion.periods[-1] == ["2026-08-12", "2026-08-19"]
+
+    # 다음 동기화에서 ALIO가 다시 공고기간을 줘도 되돌아가지 않는다.
+    service.sync()
+    fresh = service.storage.posting(1)
+    assert fresh.start_date == date(2026, 8, 12)

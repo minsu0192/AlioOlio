@@ -22,7 +22,7 @@ from .telegram import TelegramClient
 log = logging.getLogger(__name__)
 
 # 추출 로직을 고치면 올린다. 저장된 캐시가 무효화되어 관심 공고를 다시 읽는다.
-EXTRACTION_VERSION = 17
+EXTRACTION_VERSION = 18
 
 # 필터 갱신은 5분마다 돈다. 그때마다 첨부를 다시 확인하면 ALIO에 하루 천 번 넘게
 # 요청하고 노션도 그만큼 건드린다. 이 간격 안에 이미 뽑아둔 공고는 건너뛴다.
@@ -81,6 +81,7 @@ class SyncService:
                 posting.replacement = cached.replacement
             else:
                 posting = self.alio.enrich(posting)
+            self._apply_period_override(posting)
             matched = matches(posting, rules)
             is_new, _changed = self.storage.upsert(posting, self.alio.fingerprint(posting), matched)
             stats["new"] += int(is_new)
@@ -112,6 +113,19 @@ class SyncService:
         self.storage.set_meta("last_successful_sync", datetime.now(timezone.utc).isoformat())
         self.storage.set_meta("last_sync_stats", json.dumps(stats, ensure_ascii=False))
         return stats
+
+    def _apply_period_override(self, posting: Posting) -> None:
+        """공고문에서 읽은 실제 접수기간이 있으면 ALIO 값 대신 쓴다.
+
+        ALIO가 주는 지원기간이 공고기간일 때가 있다. 이걸 여기서 바꿔 두지 않으면
+        다음 동기화가 노션의 고친 날짜를 다시 공고기간으로 되돌린다.
+        """
+        raw = self.storage.get_meta(f"apply_period:{posting.seq}")
+        if not raw:
+            return
+        start, end = json.loads(raw)
+        posting.start_date = date.fromisoformat(start)
+        posting.end_date = date.fromisoformat(end)
 
     def pending_submissions(self, today: date | None = None) -> list[tuple[Posting, int]]:
         """관심 공고 중 마감이 코앞인데 아직 제출하지 않은 것. (공고, 남은 날) 목록."""
@@ -250,6 +264,12 @@ class SyncService:
         # ALIO가 주는 지원기간이 공고기간일 때가 있다. 공고문에 접수기간이 따로 적혀
         # 있으면 그쪽이 실제로 지원서를 낼 수 있는 기간이다.
         period = application_period(text, posting.start_date)
+        if period and [d.isoformat() for d in period] != [posting.start_date.isoformat(),
+                                                          posting.end_date.isoformat()]:
+            self.storage.set_meta(f"apply_period:{posting.seq}",
+                                  json.dumps([d.isoformat() for d in period]))
+            log.info("공고 %s: 접수기간을 공고문 기준으로 고칩니다 %s → %s",
+                     posting.seq, posting.start_date, period[0])
         result = {
             "version": EXTRACTION_VERSION,
             "stages": {field: {"date": hit.day.isoformat(), "evidence": hit.evidence}
