@@ -249,6 +249,9 @@ class SyncService:
             if field in extraction["stages"] or field in expected
         }
         self._warn_uncertain(posting, extraction["stages"])
+        if extraction.get("questions") and _is_blank(page["properties"].get("자소서 문항")):
+            self.telegram.send_questions(posting, extraction["questions"])
+            log.info("공고 %s: 자소서 문항이 올라와 알립니다", posting.seq)
         events = self.notion.ensure_schedule_events(schedule_ds, page["id"], posting.organization, stages)
         events += self.notion.ensure_deadline_events(
             schedule_ds, page["id"], posting.organization, extraction.get("deadlines", []))
@@ -256,7 +259,13 @@ class SyncService:
 
     def _extraction(self, posting: Posting) -> dict:
         # 최근에 뽑아둔 게 있으면 fileNo를 알아보려고 ALIO에 묻지도 않는다.
-        fresh = self.storage.extraction(posting.seq, EXTRACTION_VERSION, max_age=EXTRACTION_COOLDOWN)
+        # 다만 접수가 열리는 날은 쿨다운을 무시하고 첨부를 한 번 다시 본다. 지원서
+        # 양식이 그날 붙는 일이 있어, 그때 놓치면 다음 6시간을 그냥 흘려보낸다.
+        if self._first_look_today(posting):
+            fresh = None
+        else:
+            fresh = self.storage.extraction(posting.seq, EXTRACTION_VERSION,
+                                            max_age=EXTRACTION_COOLDOWN)
         if fresh is not None:
             return fresh
         attachments = self.alio.attachments(posting.seq)
@@ -298,6 +307,17 @@ class SyncService:
         }
         self.storage.set_extraction(posting.seq, file_no, result)
         return result
+
+    def _first_look_today(self, posting: Posting) -> bool:
+        """접수가 열리는 날 첫 확인인지. 그날 하루에 한 번만 참을 준다."""
+        if date.today() != posting.start_date:
+            return False
+        key = f"opened:{posting.seq}:{posting.start_date.isoformat()}"
+        if self.storage.get_meta(key):
+            return False
+        self.storage.set_meta(key, "1")
+        log.info("공고 %s: 접수 시작일이라 첨부를 다시 확인합니다", posting.seq)
+        return True
 
     def _profile(self, attachments: dict) -> dict[str, str]:
         """직무기술서에서 주요 업무·필요 지식·기술·직무 핵심역량을 뽑는다."""

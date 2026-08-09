@@ -46,6 +46,7 @@ class FakeNotion:
         self.profiles = []
         self.periods = []
         self.events = []
+        self.deadlines = []
         self.closed = set()
     def bootstrap(self, parent):
         return {"filter_data_source_id": "filters", "posting_data_source_id": "postings",
@@ -75,6 +76,9 @@ class FakeNotion:
     def ensure_schedule_events(self, _ds, page_id, organization, stages):
         self.events.append((page_id, stages))
         return len(stages)
+    def ensure_deadline_events(self, _ds, page_id, organization, deadlines):
+        self.deadlines.append((page_id, deadlines))
+        return len(deadlines)
 
 
 class FakeTelegram:
@@ -82,12 +86,15 @@ class FakeTelegram:
         self.sent = []
         self.reminded = []
         self.uncertain = []
+        self.questions_sent = []
     def send_posting(self, posting):
         self.sent.append(posting.seq)
     def send_reminder(self, posting, days_left):
         self.reminded.append((posting.seq, days_left))
     def send_uncertain(self, posting, items):
         self.uncertain.append((posting.seq, items))
+    def send_questions(self, posting, questions):
+        self.questions_sent.append((posting.seq, questions))
 
 
 def test_baseline_then_catchup_notifies_once(tmp_path):
@@ -311,3 +318,44 @@ def test_a_form_added_after_the_opening_day_is_picked_up(tmp_path, monkeypatch):
     _age_extractions(service, service_module.EXTRACTION_COOLDOWN + timedelta(hours=1))
     service.enrich_interests()
     assert "88" in alio.downloads, "새로 올라온 양식을 읽지 않았습니다"
+
+
+def test_the_opening_day_forces_one_extra_look(tmp_path, monkeypatch):
+    """지원서 양식은 접수가 열리는 날 붙기도 한다. 그날은 쿨다운을 무시하고 한 번 더 본다."""
+    settings = Settings("n", "p", "t", "c", database_path=str(tmp_path / "db"),
+                        notion_schedule_data_source_id="schedule")
+    alio, notion = FakeAlio(), FakeNotion([interest_page(1)])
+    today = date.today()
+    alio.items = [Posting(1, "기관", "공고 1", today, today + timedelta(days=10), today,
+                          employment_types=["정규직"], url="https://alio/1")]
+    base = {"notice": [alio.notice], "application": [], "etc": [], "job_description": []}
+    alio.attachments = lambda seq: base
+    monkeypatch.setattr(service_module, "to_text", lambda attachment, data: alio.notice_text)
+    service = SyncService(settings, Storage(settings.database_path), alio, notion, FakeTelegram())
+    service.sync()
+
+    # 첫 동기화가 접수 시작일의 한 번을 쓴다.
+    assert service.storage.get_meta(f"opened:1:{today.isoformat()}") == "1"
+
+    looked = []
+    original = alio.attachments
+    alio.attachments = lambda seq: (looked.append(seq), original(seq))[1]
+    service.enrich_interests()  # 같은 날 두 번째부터는 쿨다운을 따른다
+    assert looked == []
+
+
+def test_newly_posted_questions_are_announced(tmp_path, monkeypatch):
+    """문항이 뒤늦게 올라오면 노션에 채우고 텔레그램으로 알린다."""
+    service, alio, notion = build(tmp_path, [interest_page(1)], monkeypatch)
+    alio.notice_text = ("자기소개서 1. 지원하게 된 동기와 입사 후 포부를 "
+                        "구체적으로 기술해 주십시오. (500자 이내)")
+    service.sync()
+    assert service.telegram.questions_sent, "문항이 올라왔는데 알리지 않았습니다"
+
+    # 노션에 이미 들어간 뒤에는 다시 알리지 않는다.
+    service.telegram.questions_sent.clear()
+    filled = interest_page(1, **{"자소서 문항": {"type": "rich_text",
+                                             "rich_text": [{"plain_text": "1. 지원 동기"}]}})
+    notion.interests = [filled]
+    service.enrich_interests()
+    assert service.telegram.questions_sent == []

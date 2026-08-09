@@ -27,6 +27,15 @@ class TelegramClient:
         lines.append(posting.url)
         self._send("\n".join(lines))
 
+    def send_questions(self, posting: Posting, questions: str) -> None:
+        """자소서 문항이 뒤늦게 올라왔을 때 알린다. 공고가 뜬 뒤 붙는 일이 있다."""
+        head = "\n".join(questions.splitlines()[:6])
+        lines = [f"📝 자소서 문항이 올라왔습니다 — {posting.organization}", head]
+        if len(questions.splitlines()) > 6:
+            lines.append("… 나머지는 노션에서 확인하세요.")
+        lines.append(posting.url)
+        self._send("\n".join(lines))
+
     def send_posting(self, posting: Posting) -> None:
         lines = [
             "🔔 ALIO 새 채용공고", f"기관: {posting.organization}", f"제목: {posting.title}",
